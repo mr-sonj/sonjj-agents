@@ -77,6 +77,10 @@ export {
   skillMdExists,
   listSkillSlugs,
   generateRequestId,
+  // Custom directory resolution
+  resolveSourcesDir,
+  resolveSkillsDir,
+  invalidateSourceHelperCache,
   // Multi-header credential helpers
   detectCredentialMode,
   getEffectiveHeaderNames,

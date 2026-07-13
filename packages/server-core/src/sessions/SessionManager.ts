@@ -2037,6 +2037,15 @@ export class SessionManager implements ISessionManager {
    * Idempotent — returns immediately if already watching.
    * workspaceId must be the global config ID (what the renderer knows).
    */
+  /**
+   * Immediately refresh skills/sources directory paths for a workspace after settings change.
+   * Called from IPC when skillsDirectory or sourcesDirectory is updated.
+   * More reliable than waiting for the file system watcher to detect config.json changes.
+   */
+  refreshWorkspaceDirectoryPaths(workspaceRootPath: string): void {
+    this.configWatchers.get(workspaceRootPath)?.updateDirectoryPaths()
+  }
+
   setupConfigWatcher(workspaceRootPath: string, workspaceId: string): void {
     // Check if already watching this workspace
     if (this.configWatchers.has(workspaceRootPath)) {

@@ -11,6 +11,7 @@ import { isDecisionFeatureActive } from '../decisions/resolve.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { readPluginName } from '../utils/workspace.ts';
 import { formatBytes } from '../utils/binary-detection.ts';
+import { getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
 import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
@@ -620,6 +621,14 @@ function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string
   // Default to ${APP_ROOT}/workspaces/{id} if no path provided
   const workspacePath = workspaceRootPath || `${APP_ROOT}/workspaces/{id}`;
 
+  // Resolve actual sources and skills directories (may be custom paths from config)
+  const sourcesPath = workspaceRootPath
+    ? getWorkspaceSourcesPath(workspaceRootPath)
+    : `${workspacePath}/sources`;
+  const skillsPath = workspaceRootPath
+    ? getWorkspaceSkillsPath(workspaceRootPath)
+    : `${workspacePath}/skills`;
+
   // Read the SDK plugin name from .claude-plugin/plugin.json — this is what the SDK
   // uses to resolve skills. Falls back to basename for backwards compatibility.
   const workspaceId = (workspaceRootPath && readPluginName(workspaceRootPath))
@@ -666,7 +675,7 @@ Sources are external data connections. Each source has:
 - \`guide.md\` - Usage guidelines (read before first use!)
 
 **Using an existing source** (it already appears in \`<sources>\` above):
-1. Read its \`config.json\` and \`guide.md\` at \`${workspacePath}/sources/{slug}/\`
+1. Read its \`config.json\` and \`guide.md\` at \`${sourcesPath}/{slug}/\`
 2. If it needs auth, trigger the appropriate auth tool
 3. Call its tools directly — do not search the workspace for how to use it
 
@@ -676,8 +685,8 @@ Sources are external data connections. Each source has:
 3. Before full setup, confirm whether in-app browser is a better fit for one-off or UI-only tasks
 
 **Workspace structure:**
-- Sources: \`${workspacePath}/sources/{slug}/\`
-- Skills: \`${workspacePath}/skills/{slug}/\`
+- Sources: \`${sourcesPath}/{slug}/\`
+- Skills: \`${skillsPath}/{slug}/\`
 - Theme: \`${workspacePath}/theme.json\`
 
 ## Skills
@@ -685,14 +694,23 @@ Sources are external data connections. Each source has:
 Skills are reusable instruction sets that teach you specialized behaviors. Each skill has:
 - \`SKILL.md\` - Instructions and behavior definition (read before execution!)
 
+!!IMPORTANT!! Your skills directory for THIS workspace is: \`${skillsPath}\`
+This is the ONLY path you should use when creating, listing, or referring to skill storage.
+Do NOT default to \`~/.agents/skills/\` — that is only the global fallback directory.
+When the user asks where skills are stored or created, ALWAYS answer: \`${skillsPath}\`
+
 **Using a skill** (user mentions it with \`[skill:slug]\`):
 1. Read its \`SKILL.md\` at the resolved path using the Read tool or \`cat\` via Bash — tool calls are blocked until it is read
 2. Follow the instructions in the file to complete the user's request
 
-Skills are stored at three levels (checked in order):
-- Global: \`~/.agents/skills/{slug}/SKILL.md\`
-- Workspace: \`${workspacePath}/skills/{slug}/SKILL.md\`
-- Project: \`{projectRoot}/.agents/skills/{slug}/SKILL.md\`
+**Creating a new skill:**
+ALWAYS create new skills in: \`${skillsPath}/{slug}/SKILL.md\`
+Do NOT use \`~/.agents/skills/\` or any other path unless the user explicitly requests a "global skill".
+
+Skills resolution priority (highest first):
+1. Project: \`{projectRoot}/.agents/skills/{slug}/SKILL.md\`
+2. **Workspace**: \`${skillsPath}/{slug}/SKILL.md\`
+3. Global (fallback only): \`~/.agents/skills/{slug}/SKILL.md\`
 
 ## Project Context
 
@@ -704,9 +722,9 @@ Read relevant context files using the Read tool - they contain architecture info
 
 | Topic | Documentation | When to Read |
 |-------|---------------|--------------|
-| Sources | \`${DOC_REFS.sources}\` | BEFORE creating/modifying sources |
+| Sources | \`${DOC_REFS.sources}\` | BEFORE creating/modifying sources (sources dir: \`${sourcesPath}\`) |
 | Permissions | \`${DOC_REFS.permissions}\` | BEFORE modifying ${PERMISSION_MODE_CONFIG['safe'].displayName} mode rules |
-| Skills | \`${DOC_REFS.skills}\` | BEFORE creating custom skills |
+| Skills | \`${DOC_REFS.skills}\` | BEFORE creating custom skills (skills dir: \`${skillsPath}\`) |
 | Automations | \`${DOC_REFS.hooks}\` | BEFORE creating/modifying automations |
 | Pages | \`${DOC_REFS.pages}\` | BEFORE creating Pages or authoring page HTML |
 | Themes | \`${DOC_REFS.themes}\` | BEFORE customizing colors |

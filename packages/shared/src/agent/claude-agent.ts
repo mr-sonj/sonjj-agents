@@ -15,6 +15,7 @@ import { parseError, type AgentError } from './errors.ts';
 import { mapClaudeSdkAssistantError, type ClaudeSdkApiError } from './claude-sdk-error-mapper.ts';
 import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
+
 import { getValidClaudeOAuthToken } from '../auth/state.ts';
 import {
   clearClaudeBedrockRoutingEnvVars,
@@ -185,7 +186,7 @@ export function resolveClaudeThinkingOptions(args: {
   if (supportsAdaptiveThinking) {
     return {
       thinking: { type: 'adaptive' as const },
-      effort,
+      effort: effort as any,
     };
   }
 
@@ -1631,6 +1632,7 @@ export class ClaudeAgent extends BaseAgent {
         disallowedTools,
         // No plugins — skills are handled by BaseAgent.chat() via read-before-execute
         // (the model reads SKILL.md files directly, enforced by PrerequisiteManager)
+        // Custom skill paths are resolved via system prompt (getWorkspaceSkillsPath)
         plugins: [],
       };
 

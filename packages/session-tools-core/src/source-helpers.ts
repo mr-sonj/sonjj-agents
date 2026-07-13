@@ -7,7 +7,8 @@
  */
 
 import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, isAbsolute } from 'node:path';
+import { homedir } from 'node:os';
 import type { SourceConfig } from './types.ts';
 
 /** Strip UTF-8 BOM that breaks JSON.parse */
@@ -15,11 +16,88 @@ function stripBom(text: string): string {
   return text.charCodeAt(0) === 0xFEFF ? text.slice(1) : text;
 }
 
+// ============================================================
+// Custom Directory Resolution
+// ============================================================
+
+/** Cache for custom directory paths read from workspace config.json */
+const _customDirCache = new Map<string, { value: string | null; timestamp: number }>();
+const _CACHE_TTL_MS = 5000; // 5 second cache
+
+/** Expand ~ to home directory */
+function expandPath(p: string): string {
+  if (p.startsWith('~/')) return join(homedir(), p.slice(2));
+  return p;
+}
+
+/**
+ * Resolve the sources directory for a workspace.
+ * Reads custom path from config.json if configured, otherwise falls back to {rootPath}/sources/.
+ */
+export function resolveSourcesDir(workspaceRootPath: string): string {
+  const custom = readCustomDirFromConfig(workspaceRootPath, 'sourcesDirectory');
+  return custom ?? join(workspaceRootPath, 'sources');
+}
+
+/**
+ * Resolve the skills directory for a workspace.
+ * Reads custom path from config.json if configured, otherwise falls back to {rootPath}/skills/.
+ */
+export function resolveSkillsDir(workspaceRootPath: string): string {
+  const custom = readCustomDirFromConfig(workspaceRootPath, 'skillsDirectory');
+  return custom ?? join(workspaceRootPath, 'skills');
+}
+
+/**
+ * Read a custom directory path from workspace config.json with caching.
+ */
+function readCustomDirFromConfig(
+  rootPath: string,
+  key: 'skillsDirectory' | 'sourcesDirectory'
+): string | null {
+  const cacheKey = `${rootPath}:${key}`;
+  const cached = _customDirCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < _CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  let value: string | null = null;
+  try {
+    const configPath = join(rootPath, 'config.json');
+    if (existsSync(configPath)) {
+      const raw = readFileSync(configPath, 'utf-8');
+      const config = JSON.parse(stripBom(raw));
+      const rawPath = config?.defaults?.[key];
+      if (rawPath && typeof rawPath === 'string') {
+        value = expandPath(rawPath);
+        if (!isAbsolute(value)) value = null; // safety: ignore relative paths
+      }
+    }
+  } catch {
+    // Ignore errors reading config
+  }
+
+  _customDirCache.set(cacheKey, { value, timestamp: Date.now() });
+  return value;
+}
+
+/**
+ * Invalidate the custom directory cache for a workspace (or all).
+ */
+export function invalidateSourceHelperCache(workspaceRootPath?: string): void {
+  if (workspaceRootPath) {
+    _customDirCache.delete(`${workspaceRootPath}:skillsDirectory`);
+    _customDirCache.delete(`${workspaceRootPath}:sourcesDirectory`);
+  } else {
+    _customDirCache.clear();
+  }
+}
+
 /**
  * Get the path to a source's directory
  */
 export function getSourcePath(workspaceRootPath: string, sourceSlug: string): string {
-  return join(workspaceRootPath, 'sources', sourceSlug);
+  return join(resolveSourcesDir(workspaceRootPath), sourceSlug);
 }
 
 /**
@@ -77,7 +155,7 @@ export function loadSourceConfig(
  * List all source slugs in a workspace
  */
 export function listSourceSlugs(workspaceRootPath: string): string[] {
-  const sourcesDir = join(workspaceRootPath, 'sources');
+  const sourcesDir = resolveSourcesDir(workspaceRootPath);
 
   if (!existsSync(sourcesDir)) {
     return [];
@@ -98,7 +176,7 @@ export function listSourceSlugs(workspaceRootPath: string): string[] {
  * Get the path to a skill's directory
  */
 export function getSkillPath(workspaceRootPath: string, skillSlug: string): string {
-  return join(workspaceRootPath, 'skills', skillSlug);
+  return join(resolveSkillsDir(workspaceRootPath), skillSlug);
 }
 
 /**
@@ -126,7 +204,7 @@ export function skillMdExists(workspaceRootPath: string, skillSlug: string): boo
  * List all skill slugs in a workspace
  */
 export function listSkillSlugs(workspaceRootPath: string): string[] {
-  const skillsDir = join(workspaceRootPath, 'skills');
+  const skillsDir = resolveSkillsDir(workspaceRootPath);
 
   if (!existsSync(skillsDir)) {
     return [];

@@ -1537,7 +1537,7 @@ export function validateAllPermissions(workspaceRoot: string): ValidationResult 
   warnings.push(...wsResult.warnings);
 
   // Validate all source-level permissions
-  const sourcesDir = join(workspaceRoot, 'sources');
+  const sourcesDir = getWorkspaceSourcesPath(workspaceRoot);
   if (existsSync(sourcesDir)) {
     const entries = readdirSync(sourcesDir);
     for (const entry of entries) {

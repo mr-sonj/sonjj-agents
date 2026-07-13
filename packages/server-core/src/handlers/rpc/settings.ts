@@ -115,6 +115,8 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       cyclablePermissionModes: config?.defaults?.cyclablePermissionModes,
       thinkingLevel: normalizeThinkingLevel(config?.defaults?.thinkingLevel),
       workingDirectory: config?.defaults?.workingDirectory,
+      skillsDirectory: config?.defaults?.skillsDirectory,
+      sourcesDirectory: config?.defaults?.sourcesDirectory,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
@@ -129,7 +131,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       : value
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection']
+    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'skillsDirectory', 'sourcesDirectory', 'localMcpEnabled', 'defaultLlmConnection']
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
     }
@@ -170,6 +172,17 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
 
     // Save the config
     saveWorkspaceConfig(workspace.rootPath, config)
+
+    // Invalidate custom path cache when directory paths change, then immediately
+    // refresh the config watcher so the UI updates without requiring an app restart.
+    if (key === 'skillsDirectory' || key === 'sourcesDirectory') {
+      const { invalidateCustomPathCache } = await import('@craft-agent/shared/workspaces')
+      invalidateCustomPathCache(workspace.rootPath)
+      const { invalidateSourceHelperCache } = await import('@craft-agent/session-tools-core')
+      invalidateSourceHelperCache(workspace.rootPath)
+      deps.sessionManager.refreshWorkspaceDirectoryPaths(workspace.rootPath)
+    }
+
     deps.platform.logger.info(`Workspace setting updated: ${key} = ${JSON.stringify(normalizedValue)}`)
   })
 
