@@ -17,8 +17,8 @@
  */
 
 import { watch, existsSync, readdirSync, statSync, readFileSync, mkdirSync } from 'fs';
-import { join, dirname, basename, relative } from 'path';
 import { platform } from 'os';
+import { join, dirname, basename, relative, sep } from 'path';
 import type { FSWatcher } from 'fs';
 import { CONFIG_DIR } from './paths.ts';
 import { debug } from '../utils/debug.ts';
@@ -221,6 +221,10 @@ export class ConfigWatcher {
   private knownSkills: Set<string> = new Set();
   private knownThemes: Set<string> = new Set();
 
+  // Watchers for custom directories outside the workspace folder
+  private externalSourcesWatcher: FSWatcher | null = null;
+  private externalSkillsWatcher: FSWatcher | null = null;
+
   // Track LLM connections for change detection (JSON string for deep comparison)
   private lastLlmConnectionsHash: string = '';
 
@@ -287,6 +291,11 @@ export class ConfigWatcher {
     // Watch workspace directory recursively
     this.watchWorkspaceDir();
     span.mark('watchWorkspaceDir');
+
+    // Watch external sources/skills directories if configured outside workspace
+    this.watchExternalSourcesDir(this.sourcesDir);
+    this.watchExternalSkillsDir(this.skillsDir);
+    span.mark('watchExternalDirs');
 
     // Watch app-level themes directory
     this.watchAppThemesDir();
@@ -361,6 +370,16 @@ export class ConfigWatcher {
     }
     this.watchers = [];
 
+    // Close external directory watchers
+    if (this.externalSourcesWatcher) {
+      this.externalSourcesWatcher.close();
+      this.externalSourcesWatcher = null;
+    }
+    if (this.externalSkillsWatcher) {
+      this.externalSkillsWatcher.close();
+      this.externalSkillsWatcher = null;
+    }
+
     this.knownSources.clear();
     this.knownSkills.clear();
     this.knownThemes.clear();
@@ -419,11 +438,180 @@ export class ConfigWatcher {
     }
   }
 
+  // ============================================================
+  // External Directory Watchers
+  // ============================================================
+
+  /**
+   * Returns true if dir is outside the workspace directory.
+   * The workspace recursive watcher already covers internal paths.
+   */
+  private isExternalDir(dir: string): boolean {
+    return !dir.startsWith(this.workspaceDir + sep) && dir !== this.workspaceDir;
+  }
+
+  /**
+   * Watch an external sources directory (one outside workspaceDir).
+   * Closes the previous external sources watcher before opening a new one.
+   * No-ops if dir is inside the workspace (already covered by the recursive watcher).
+   */
+  private watchExternalSourcesDir(sourcesDir: string): void {
+    if (this.externalSourcesWatcher) {
+      this.externalSourcesWatcher.close();
+      this.externalSourcesWatcher = null;
+    }
+
+    if (!this.isExternalDir(sourcesDir)) return;
+
+    if (!existsSync(sourcesDir)) {
+      try { mkdirSync(sourcesDir, { recursive: true }); } catch { /* ignore */ }
+    }
+
+    try {
+      const watcher = watch(sourcesDir, { recursive: true }, (eventType, filename) => {
+        if (!filename) return;
+        const normalizedPath = filename.replace(/\\/g, '/');
+        this.handleExternalSourcesFileChange(normalizedPath, eventType);
+      });
+      this.externalSourcesWatcher = watcher;
+      debug('[ConfigWatcher] Watching external sources directory:', sourcesDir);
+    } catch (error) {
+      debug('[ConfigWatcher] Error watching external sources directory:', error);
+    }
+  }
+
+  /**
+   * Watch an external skills directory (one outside workspaceDir).
+   * Closes the previous external skills watcher before opening a new one.
+   * No-ops if dir is inside the workspace (already covered by the recursive watcher).
+   */
+  private watchExternalSkillsDir(skillsDir: string): void {
+    if (this.externalSkillsWatcher) {
+      this.externalSkillsWatcher.close();
+      this.externalSkillsWatcher = null;
+    }
+
+    if (!this.isExternalDir(skillsDir)) return;
+
+    if (!existsSync(skillsDir)) {
+      try { mkdirSync(skillsDir, { recursive: true }); } catch { /* ignore */ }
+    }
+
+    try {
+      const watcher = watch(skillsDir, { recursive: true }, (eventType, filename) => {
+        if (!filename) return;
+        const normalizedPath = filename.replace(/\\/g, '/');
+        this.handleExternalSkillsFileChange(normalizedPath, eventType);
+      });
+      this.externalSkillsWatcher = watcher;
+      debug('[ConfigWatcher] Watching external skills directory:', skillsDir);
+    } catch (error) {
+      debug('[ConfigWatcher] Error watching external skills directory:', error);
+    }
+  }
+
+  /**
+   * Route file changes from an external sources directory to existing handlers.
+   * relativePath is relative to the external sourcesDir (e.g. "my-source/config.json").
+   */
+  private handleExternalSourcesFileChange(relativePath: string, eventType: string): void {
+    debug('[ConfigWatcher] External sources file change:', relativePath, eventType);
+    const parts = relativePath.split('/');
+    if (parts.length < 1 || !parts[0]) return;
+
+    const slug = parts[0];
+
+    if (parts.length === 1) {
+      this.debounce('sources-dir', () => this.handleSourcesDirChange());
+      return;
+    }
+
+    const file = parts[1];
+    if (file === 'config.json') {
+      this.debounce(`source-config:${slug}`, () => this.handleSourceConfigChange(slug));
+    } else if (file === 'guide.md') {
+      this.debounce(`source-guide:${slug}`, () => this.handleSourceGuideChange(slug));
+    } else if (file === 'permissions.json') {
+      this.debounce(`source-permissions:${slug}`, () => this.handleSourcePermissionsChange(slug));
+    } else if (file && /^icon\.(svg|png|jpg|jpeg)$/i.test(file)) {
+      this.debounce(`source-icon:${slug}`, () => this.handleSourceConfigChange(slug));
+    }
+  }
+
+  /**
+   * Route file changes from an external skills directory to existing handlers.
+   * relativePath is relative to the external skillsDir (e.g. "my-skill/SKILL.md").
+   */
+  private handleExternalSkillsFileChange(relativePath: string, eventType: string): void {
+    debug('[ConfigWatcher] External skills file change:', relativePath, eventType);
+    const parts = relativePath.split('/');
+    if (parts.length < 1 || !parts[0]) return;
+
+    const slug = parts[0];
+
+    if (parts.length === 1) {
+      this.debounce('skills-dir', () => this.handleSkillsDirChange());
+      return;
+    }
+
+    const file = parts[1];
+    if (file === 'SKILL.md') {
+      this.debounce(`skill:${slug}`, () => this.handleSkillChange(slug));
+    } else if (file && /^icon\.(svg|png|jpg|jpeg)$/i.test(file)) {
+      this.debounce(`skill-icon:${slug}`, () => this.handleSkillChange(slug));
+    }
+  }
+
+  /**
+   * Refresh sourcesDir and skillsDir from workspace config.
+   * Called when workspace config.json changes (may contain directory path updates).
+   * If paths changed, re-scans the new directories.
+   */
+  private refreshDirectoryPaths(): void {
+    const newSourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
+    const newSkillsDir = getWorkspaceSkillsPath(this.workspaceDir);
+
+    if (newSourcesDir !== this.sourcesDir) {
+      debug('[ConfigWatcher] Sources directory changed:', this.sourcesDir, '->', newSourcesDir);
+      this.sourcesDir = newSourcesDir;
+      this.knownSources.clear();
+      this.scanSources();
+      this.watchExternalSourcesDir(newSourcesDir);
+      const allSources = loadWorkspaceSources(this.workspaceDir);
+      this.callbacks.onSourcesListChange?.(allSources);
+    }
+
+    if (newSkillsDir !== this.skillsDir) {
+      debug('[ConfigWatcher] Skills directory changed:', this.skillsDir, '->', newSkillsDir);
+      this.skillsDir = newSkillsDir;
+      this.knownSkills.clear();
+      this.scanSkills();
+      this.watchExternalSkillsDir(newSkillsDir);
+      const allSkills = loadAllSkills(this.workspaceDir);
+      this.callbacks.onSkillsListChange?.(allSkills);
+    }
+  }
+
+  /**
+   * Public method to force refresh directory paths.
+   * Called from IPC when workspace settings are updated.
+   */
+  updateDirectoryPaths(): void {
+    this.refreshDirectoryPaths();
+  }
+
   /**
    * Handle a file change within the workspace directory
    */
   private handleWorkspaceFileChange(relativePath: string, eventType: string): void {
+    debug('[ConfigWatcher] File change detected:', relativePath, eventType);
     const parts = relativePath.split('/');
+
+    // Workspace-level config.json - may contain directory path changes
+    if (relativePath === 'config.json') {
+      this.debounce('workspace-config', () => this.refreshDirectoryPaths());
+      return;
+    }
 
     // Workspace-level permissions.json
     if (relativePath === 'permissions.json') {
@@ -456,6 +644,8 @@ export class ConfigWatcher {
         this.debounce(`source-guide:${slug}`, () => this.handleSourceGuideChange(slug));
       } else if (file === 'permissions.json') {
         this.debounce(`source-permissions:${slug}`, () => this.handleSourcePermissionsChange(slug));
+      } else if (file && /^icon\.(svg|png|jpg|jpeg)$/i.test(file)) {
+        this.debounce(`source-icon:${slug}`, () => this.handleSourceConfigChange(slug));
       }
       return;
     }
@@ -632,12 +822,11 @@ export class ConfigWatcher {
       }
 
       // Find removed folders
-      for (const folder of this.knownSources) {
-        if (!currentFolders.has(folder)) {
-          debug('[ConfigWatcher] Removed source folder:', folder);
-          this.knownSources.delete(folder);
-          this.callbacks.onSourceChange?.(folder, null);
-        }
+      const removedSources = Array.from(this.knownSources).filter(f => !currentFolders.has(f));
+      for (const folder of removedSources) {
+        debug('[ConfigWatcher] Removed source folder:', folder);
+        this.knownSources.delete(folder);
+        this.callbacks.onSourceChange?.(folder, null);
       }
 
       // Notify list change
@@ -789,12 +978,11 @@ export class ConfigWatcher {
       }
 
       // Find removed folders
-      for (const folder of this.knownSkills) {
-        if (!currentFolders.has(folder)) {
-          debug('[ConfigWatcher] Removed skill folder:', folder);
-          this.knownSkills.delete(folder);
-          this.callbacks.onSkillChange?.(folder, null);
-        }
+      const removedSkills = Array.from(this.knownSkills).filter(f => !currentFolders.has(f));
+      for (const folder of removedSkills) {
+        debug('[ConfigWatcher] Removed skill folder:', folder);
+        this.knownSkills.delete(folder);
+        this.callbacks.onSkillChange?.(folder, null);
       }
 
       // Invalidate cache before reloading so we get fresh results

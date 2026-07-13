@@ -80,11 +80,14 @@ export function getWorkspacePath(workspaceId: string): string {
 }
 
 /**
- * Get path to workspace sources directory
+ * Get path to workspace sources directory.
+ * If a custom sourcesDirectory is configured in workspace config, returns that path.
+ * Otherwise falls back to {rootPath}/sources/.
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSourcesPath(rootPath: string): string {
-  return join(rootPath, 'sources');
+  const customPath = getCustomDirectoryPath(rootPath, 'sourcesDirectory');
+  return customPath ?? join(rootPath, 'sources');
 }
 
 /**
@@ -96,11 +99,59 @@ export function getWorkspaceSessionsPath(rootPath: string): string {
 }
 
 /**
- * Get path to workspace skills directory
+ * Get path to workspace skills directory.
+ * If a custom skillsDirectory is configured in workspace config, returns that path.
+ * Otherwise falls back to {rootPath}/skills/.
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSkillsPath(rootPath: string): string {
-  return join(rootPath, 'skills');
+  const customPath = getCustomDirectoryPath(rootPath, 'skillsDirectory');
+  return customPath ?? join(rootPath, 'skills');
+}
+
+/**
+ * Read a custom directory path from workspace config.
+ * Returns the expanded absolute path if configured, or null if not set.
+ * Uses a lightweight cache to avoid reading config.json on every call.
+ */
+const _customPathCache = new Map<string, { value: string | null; timestamp: number }>();
+const CACHE_TTL_MS = 5000; // 5 second cache
+
+function getCustomDirectoryPath(
+  rootPath: string,
+  key: 'skillsDirectory' | 'sourcesDirectory'
+): string | null {
+  const cacheKey = `${rootPath}:${key}`;
+  const cached = _customPathCache.get(cacheKey);
+  if (cached && Date.now() - cached.timestamp < CACHE_TTL_MS) {
+    return cached.value;
+  }
+
+  let value: string | null = null;
+  try {
+    const config = loadWorkspaceConfig(rootPath);
+    if (config?.defaults?.[key]) {
+      value = config.defaults[key] as string;
+    }
+  } catch {
+    // Ignore errors reading config
+  }
+
+  _customPathCache.set(cacheKey, { value, timestamp: Date.now() });
+  return value;
+}
+
+/**
+ * Invalidate the custom directory path cache for a workspace.
+ * Called after workspace settings are updated.
+ */
+export function invalidateCustomPathCache(rootPath?: string): void {
+  if (rootPath) {
+    _customPathCache.delete(`${rootPath}:skillsDirectory`);
+    _customPathCache.delete(`${rootPath}:sourcesDirectory`);
+  } else {
+    _customPathCache.clear();
+  }
 }
 
 // ============================================================
@@ -121,6 +172,12 @@ export function loadWorkspaceConfig(rootPath: string): WorkspaceConfig | null {
     // Expand path variables in defaults for portability
     if (config.defaults?.workingDirectory) {
       config.defaults.workingDirectory = expandPath(config.defaults.workingDirectory);
+    }
+    if (config.defaults?.skillsDirectory) {
+      config.defaults.skillsDirectory = expandPath(config.defaults.skillsDirectory);
+    }
+    if (config.defaults?.sourcesDirectory) {
+      config.defaults.sourcesDirectory = expandPath(config.defaults.sourcesDirectory);
     }
 
     // Compatibility: accept canonical or legacy permission mode names on read
@@ -173,9 +230,24 @@ export function saveWorkspaceConfig(rootPath: string, config: WorkspaceConfig): 
       workingDirectory: toPortablePath(storageConfig.defaults.workingDirectory),
     };
   }
+  if (storageConfig.defaults?.skillsDirectory) {
+    storageConfig.defaults = {
+      ...storageConfig.defaults,
+      skillsDirectory: toPortablePath(storageConfig.defaults.skillsDirectory),
+    };
+  }
+  if (storageConfig.defaults?.sourcesDirectory) {
+    storageConfig.defaults = {
+      ...storageConfig.defaults,
+      sourcesDirectory: toPortablePath(storageConfig.defaults.sourcesDirectory),
+    };
+  }
 
   // Use atomic write to prevent corruption on crash/interrupt
   atomicWriteFileSync(join(rootPath, 'config.json'), JSON.stringify(storageConfig, null, 2));
+
+  // Invalidate cache since config has changed
+  invalidateCustomPathCache(rootPath);
 }
 
 // ============================================================
@@ -339,14 +411,14 @@ export function createWorkspaceAtPath(
     updatedAt: now,
   };
 
+  // Save config FIRST so directory path resolvers can read any custom directories
+  saveWorkspaceConfig(rootPath, config);
+
   // Create workspace directory structure
-  mkdirSync(rootPath, { recursive: true });
+  // rootPath is already created by saveWorkspaceConfig
   mkdirSync(getWorkspaceSourcesPath(rootPath), { recursive: true });
   mkdirSync(getWorkspaceSessionsPath(rootPath), { recursive: true });
   mkdirSync(getWorkspaceSkillsPath(rootPath), { recursive: true });
-
-  // Save config
-  saveWorkspaceConfig(rootPath, config);
 
   // Initialize status configuration with defaults
   saveStatusConfig(rootPath, getDefaultStatusConfig());

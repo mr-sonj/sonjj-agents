@@ -1,11 +1,13 @@
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from './handler-deps'
-
 export const GUI_HANDLED_CHANNELS = [
   RPC_CHANNELS.power.SET_KEEP_AWAKE,
   RPC_CHANNELS.settings.SET_NETWORK_PROXY,
 ] as const
+
+/** @deprecated Use GUI_HANDLED_CHANNELS */
+export const HANDLED_CHANNELS = [...GUI_HANDLED_CHANNELS] as const
 
 // ============================================================
 // GUI-only settings (require Electron-specific APIs)

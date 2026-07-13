@@ -36,6 +36,8 @@ export {
   renameWorkspaceFolder,
   // Auto-discovery
   discoverWorkspacesInDefaultLocation,
+  // Cache management
+  invalidateCustomPathCache,
   // Constants
   CONFIG_DIR,
   DEFAULT_WORKSPACES_DIR,

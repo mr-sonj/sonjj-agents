@@ -31,26 +31,34 @@ Craft Agent uses **the identical SKILL.md format** as the Claude Code SDK. This 
 
 ## Skill Precedence
 
-When a skill is invoked (e.g., `/commit`):
+When a skill is invoked (e.g., `[skill:commit]`), it is resolved using the following priority order (highest to lowest):
 
-1. **Workspace skill checked first** - If `~/.craft-agent/workspaces/{id}/skills/commit/SKILL.md` exists, it's used
-2. **SDK skill as fallback** - If no workspace skill exists, the built-in SDK skill is used
+1. **Workspace Skill** - `{skills-directory}/commit/SKILL.md` in the user's workspace config.
+2. **Project Skill** - `{.agents/skills}/commit/SKILL.md` in the current working directory.
+3. **Global Skill** - `~/.agents/skills/commit/SKILL.md` shared across all projects.
 
 This allows you to:
-- **Override SDK skills** - Create a workspace skill with the same slug to replace built-in behavior
+- **Override behaviors** - Create a project or workspace skill with the same slug to replace global/default behavior
 - **Extend SDK skills** - Reference SDK behavior in your custom skill and add workspace-specific instructions
-- **Create new skills** - Add entirely new skills not in the SDK
+- **Create new skills** - Add entirely new skills for your specific workflow.
+
+> **Note on creating skills:** By default, new skills should be created in the **Workspace** directory. Global skills should only be created when specifically requested.
 
 ## Skill Storage
 
-Skills are stored as folders:
+Skills are stored as folders under the workspace skills directory:
 ```
-~/.craft-agent/workspaces/{workspaceId}/skills/{slug}/
+{skills-directory}/{slug}/
 ├── SKILL.md          # Required: Skill definition (same format as Claude Code SDK)
 ├── icon.svg          # Recommended: Skill icon for UI display
 ├── icon.png          # Alternative: PNG icon
 └── (other files)     # Optional: Additional resources
 ```
+
+> **Skill directory path:** The actual skills path is shown in the system prompt
+> as `Skills: <path>`. By default it's `~/.craft-agent/workspaces/{id}/skills/`,
+> but it can be customized per workspace via `skillsDirectory` in `config.json`.
+> When set, skills are read from that custom path instead.
 
 ## SKILL.md Format
 
@@ -130,8 +138,9 @@ requiredSources:
 
 ### 1. Create the skill directory
 
+Create a folder inside your workspace's skills directory (see path in system prompt):
 ```bash
-mkdir -p ~/.craft-agent/workspaces/{ws}/skills/my-skill
+mkdir -p {skills-directory}/my-skill
 ```
 
 ### 2. Write SKILL.md
@@ -296,7 +305,7 @@ session — no manual toggle needed.
 
 To customize a built-in SDK skill like `/commit`:
 
-1. Create `~/.craft-agent/workspaces/{ws}/skills/commit/SKILL.md`
+1. Create `{skills-directory}/commit/SKILL.md`
 2. Write your custom instructions
 3. Add an icon
 4. Run `skill_validate({ skillSlug: "commit" })`
@@ -316,6 +325,8 @@ This is useful for:
 4. **Keep focused**: One skill = one specific task or domain
 5. **Add a relevant icon**: Makes skills easily identifiable in the UI
 6. **Always validate**: Run `skill_validate` after creating or editing
+7. **Use Obsidian tags**: Since skills are created in your Obsidian workspace folder, include appropriate tags (e.g., `#skill`, `#dev`) in the SKILL.md content to easily classify and search them within Obsidian.
+8. **Offload tasks to code**: If a task can be easily performed by code, always create a `.py` script inside the skill folder and execute it from the skill. This helps reduce token usage and increases the accuracy of the skill.
 
 ## Troubleshooting
 
