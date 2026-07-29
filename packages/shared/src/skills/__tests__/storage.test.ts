@@ -14,7 +14,7 @@
  * baseline count and validating relative to it.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, symlinkSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import {
@@ -308,6 +308,28 @@ describe('loadWorkspaceSkills', () => {
 
     expect(skills).toHaveLength(1);
     expect(skills[0]!.slug).toBe('real-skill');
+  });
+
+  it('should load skills that are symlinks to directories', () => {
+    const skillsDir = join(workspaceRoot, 'skills');
+    const externalDir = join(tempDir, 'external-skills');
+    createSkill(externalDir, 'symlinked-skill', { name: 'Symlinked Skill' });
+
+    mkdirSync(skillsDir, { recursive: true });
+    symlinkSync(
+      join(externalDir, 'symlinked-skill'),
+      join(skillsDir, 'symlinked-skill'),
+      process.platform === 'win32' ? 'dir' : undefined
+    );
+
+    const skills = loadWorkspaceSkills(workspaceRoot);
+
+    expect(skills).toHaveLength(1);
+    expect(skills[0]!.slug).toBe('symlinked-skill');
+    expect(skills[0]!.metadata.name).toBe('Symlinked Skill');
+
+    const slugs = listSkillSlugs(workspaceRoot);
+    expect(slugs).toEqual(['symlinked-skill']);
   });
 });
 

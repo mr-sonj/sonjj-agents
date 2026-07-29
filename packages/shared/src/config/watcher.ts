@@ -23,7 +23,7 @@ import type { FSWatcher } from 'fs';
 import { CONFIG_DIR } from './paths.ts';
 import { debug } from '../utils/debug.ts';
 import { expandPath } from '../utils/paths.ts';
-import { readJsonFileSync } from '../utils/files.ts';
+import { readJsonFileSync, isDirectorySafe } from '../utils/files.ts';
 import { perf } from '../utils/perf.ts';
 import { loadStoredConfig, type StoredConfig } from './storage.ts';
 import {
@@ -767,7 +767,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.sourcesDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           this.knownSources.add(entry);
         }
       }
@@ -803,7 +803,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.sourcesDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           currentFolders.add(entry);
         }
       }
@@ -923,7 +923,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.skillsDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           this.knownSkills.add(entry);
         }
       }
@@ -959,7 +959,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.skillsDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           currentFolders.add(entry);
         }
       }

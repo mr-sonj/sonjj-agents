@@ -50,6 +50,33 @@ export function atomicWriteFileSync(filePath: string, data: string): void {
   }
 }
 
+/**
+ * Safely check if a path is a directory (follows symlinks, returns false on errors/broken symlinks).
+ */
+export function isDirectorySafe(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a filesystem Dirent is a directory, following symlinks if applicable.
+ */
+export function isDirectoryEntry(parentDir: string, entry: import('fs').Dirent | string): boolean {
+  if (!entry) return false;
+  if (typeof entry === 'string') {
+    return isDirectorySafe(join(parentDir, entry));
+  }
+  if (typeof entry.isDirectory === 'function' && entry.isDirectory()) return true;
+  if (typeof entry.isSymbolicLink === 'function' && entry.isSymbolicLink()) {
+    return isDirectorySafe(join(parentDir, entry.name));
+  }
+  return false;
+}
+
+
 export interface FileAttachment {
   type: 'image' | 'text' | 'pdf' | 'office' | 'audio' | 'unknown';
   path: string;

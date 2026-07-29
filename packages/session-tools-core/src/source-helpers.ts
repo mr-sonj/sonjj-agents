@@ -151,6 +151,14 @@ export function loadSourceConfig(
   }
 }
 
+function isDirectorySafe(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * List all source slugs in a workspace
  */
@@ -165,7 +173,7 @@ export function listSourceSlugs(workspaceRootPath: string): string[] {
     const entries = readdirSync(sourcesDir);
     return entries.filter((entry) => {
       const entryPath = join(sourcesDir, entry);
-      return statSync(entryPath).isDirectory();
+      return isDirectorySafe(entryPath);
     });
   } catch {
     return [];
@@ -214,7 +222,7 @@ export function listSkillSlugs(workspaceRootPath: string): string[] {
     const entries = readdirSync(skillsDir);
     return entries.filter((entry) => {
       const entryPath = join(skillsDir, entry);
-      return statSync(entryPath).isDirectory();
+      return isDirectorySafe(entryPath);
     });
   } catch {
     return [];
