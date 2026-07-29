@@ -23,6 +23,7 @@ import {
   restoreFiles,
   validateBundleFile,
 } from '../utils/bundle-files.ts'
+import { isDirectoryEntry } from '../utils/files.ts'
 import { getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts'
 import { loadSourceConfig, getSourcePath } from '../sources/storage.ts'
 import { validateSourceConfig } from '../config/validators.ts'
@@ -179,7 +180,7 @@ function exportSources(
   let slugs: string[]
   if (selection === 'all') {
     slugs = readdirSync(sourcesDir, { withFileTypes: true })
-      .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+      .filter(d => isDirectoryEntry(sourcesDir, d) && !d.name.startsWith('.'))
       .map(d => d.name)
   } else {
     slugs = selection
@@ -231,7 +232,7 @@ function exportSkills(
   let slugs: string[]
   if (selection === 'all') {
     slugs = readdirSync(skillsDir, { withFileTypes: true })
-      .filter(d => d.isDirectory() && !d.name.startsWith('.'))
+      .filter(d => isDirectoryEntry(skillsDir, d) && !d.name.startsWith('.'))
       .map(d => d.name)
   } else {
     slugs = selection

@@ -248,11 +248,11 @@ describe('qualifySkillName with filesystem resolution', () => {
     expect(result.input).toEqual({ skill: `${AGENTS_PLUGIN_NAME}:proj-only` })
   })
 
-  it('workspace skill takes priority over project skill (same slug)', () => {
+  it('project skill takes priority over workspace skill (same slug)', () => {
     const result = qualifySkillName({ skill: 'shared-skill' }, workspaceSlug, workspaceRoot, projectDir)
     expect(result.modified).toBe(true)
-    // Workspace has higher priority than project — should resolve to workspace slug:
-    expect(result.input).toEqual({ skill: 'my-workspace:shared-skill' })
+    // Project has higher priority than workspace — should resolve to AGENTS_PLUGIN_NAME slug:
+    expect(result.input).toEqual({ skill: `${AGENTS_PLUGIN_NAME}:shared-skill` })
   })
 
   it('re-qualifies incorrectly qualified skill (workspace prefix for project skill)', () => {

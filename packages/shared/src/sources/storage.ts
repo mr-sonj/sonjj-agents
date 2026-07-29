@@ -19,7 +19,8 @@ import type {
 } from './types.ts';
 import { validateSourceConfig } from '../config/validators.ts';
 import { debug } from '../utils/debug.ts';
-import { readJsonFileSync } from '../utils/files.ts';
+import { readJsonFileSync, isDirectoryEntry } from '../utils/files.ts';
+import { getBuiltinSources, isBuiltinSource, getDocsSource } from './builtin-sources.ts';
 import { expandPath, toPortablePath } from '../utils/paths.ts';
 import { getWorkspaceSourcesPath } from '../workspaces/storage.ts';
 // Circular import (credential-manager imports from this file) is safe here:
@@ -371,7 +372,7 @@ export function loadWorkspaceSources(workspaceRootPath: string): LoadedSource[] 
   const entries = readdirSync(sourcesDir, { withFileTypes: true });
 
   for (const entry of entries) {
-    if (entry.isDirectory()) {
+    if (isDirectoryEntry(sourcesDir, entry)) {
       const source = loadSource(workspaceRootPath, entry.name);
       if (source) {
         sources.push(source);
@@ -458,7 +459,7 @@ export function generateSourceSlug(workspaceRootPath: string, name: string): str
   if (existsSync(sourcesDir)) {
     const entries = readdirSync(sourcesDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (entry.isDirectory()) {
+      if (isDirectoryEntry(sourcesDir, entry)) {
         existingSlugs.add(entry.name);
       }
     }
