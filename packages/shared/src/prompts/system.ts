@@ -1,9 +1,10 @@
 import { formatPreferencesForPrompt, getCoAuthorPreference } from '../config/preferences.ts';
 import { getBrowserToolEnabled, getRtkEnabled } from '../config/storage.ts';
 import { getRtkPath } from '../agent/core/rtk-detector.ts';
+import { loadWorkspaceConfig } from '../workspaces/storage.ts';
 import { debug } from '../utils/debug.ts';
 import { existsSync, readFileSync, readdirSync } from 'fs';
-import { dirname, join, relative, basename, resolve } from 'path';
+import { isAbsolute, join, relative, basename, resolve, dirname } from 'path';
 import { DOC_REFS, APP_ROOT } from '../docs/index.ts';
 import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
@@ -104,8 +105,7 @@ export function invalidateContextFileCache(directory?: string): void {
 }
 
 /**
- * Find all project context files (AGENTS.md or CLAUDE.md) recursively in a directory.
- * Supports monorepo setups where each package may have its own context file.
+ * Find project context files (AGENTS.md or CLAUDE.md) in a directory.
  * Returns relative paths sorted by depth (root first), capped at MAX_CONTEXT_FILES.
  *
  * Results are cached per directory. Call invalidateContextFileCache() on working
@@ -191,6 +191,40 @@ export function readProjectContextFile(directory: string): { filename: string; c
   return null;
 }
 
+function isSameOrChildPath(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+function getProjectContextSearchDirectories(workingDirectory: string, workspaceRootPath?: string): string[] {
+  const selectedDir = resolve(workingDirectory);
+  const rootDir = workspaceRootPath ? resolve(workspaceRootPath) : selectedDir;
+
+  if (!isSameOrChildPath(rootDir, selectedDir)) {
+    return [rootDir, selectedDir];
+  }
+
+  if (selectedDir === rootDir) {
+    return [rootDir];
+  }
+
+  const parentDir = dirname(selectedDir);
+  if (parentDir === rootDir) {
+    return [rootDir, selectedDir];
+  }
+
+  return [rootDir, parentDir, selectedDir];
+}
+
+function getProjectContextRootDirectory(workspaceRootPath?: string): string | undefined {
+  if (!workspaceRootPath) {
+    return undefined;
+  }
+
+  const workspaceConfig = loadWorkspaceConfig(workspaceRootPath);
+  return workspaceConfig?.defaults?.workingDirectory || workspaceRootPath;
+}
+
 /**
  * Get the working directory context string for injection into user messages.
  * Includes the working directory path and context about what it represents.
@@ -267,37 +301,72 @@ export interface DebugModeConfig {
 
 /**
  * Get the project context files prompt section for the system prompt.
- * Lists all discovered context files (AGENTS.md, CLAUDE.md) in the working directory.
- * For monorepos, this includes nested package context files.
+ * Lists context files (AGENTS.md, CLAUDE.md) along the path from workspace root
+ * to the selected working directory.
  * Returns empty string if no working directory or no context files found.
  */
-export function getProjectContextFilesPrompt(workingDirectory?: string): string {
+export function getProjectContextFilesPrompt(workingDirectory?: string, workspaceRootPath?: string): string {
   if (!workingDirectory) {
     return '';
   }
 
-  const { contextRoot, contextFiles } = findRelevantProjectContextFiles(workingDirectory);
-  if (contextFiles.length === 0) {
+  // If no workspace root is provided and we're inside a git repository,
+  // use git-relative context file discovery (developer context).
+  if (!workspaceRootPath) {
+    const resolvedWorkingDirectory = resolve(workingDirectory);
+    const gitRoot = findGitRepositoryRoot(resolvedWorkingDirectory);
+    if (gitRoot) {
+      const { contextRoot, contextFiles } = findRelevantProjectContextFiles(workingDirectory);
+      if (contextFiles.length === 0) {
+        return '';
+      }
+
+      // Format file list with (root) annotation for top-level files. Paths are
+      // relative to contextRoot, which may be a git repository root when the
+      // selected working directory is nested inside a repo.
+      const fileList = contextFiles
+        .map((file) => {
+          const sanitized = sanitizePromptLine(file, PROJECT_CONTEXT_FILES_TAGS);
+          const isRoot = !sanitized.includes('/');
+          return `- ${sanitized}${isRoot ? ' (root)' : ''}`;
+        })
+        .join('\n');
+
+      const workingDirectoryAttr = escapePromptXmlAttr(workingDirectory);
+      const contextRootAttr = escapePromptXmlAttr(contextRoot);
+
+      return `
+<project_context_files working_directory="${workingDirectoryAttr}" context_root="${contextRootAttr}">
+${fileList}
+</project_context_files>`;
+    }
+  }
+
+  const fileLines: string[] = [];
+  const selectedDir = resolve(workingDirectory);
+  const rootDir = workspaceRootPath ? resolve(workspaceRootPath) : selectedDir;
+  const searchDirectories = getProjectContextSearchDirectories(workingDirectory, workspaceRootPath);
+
+  for (const directory of searchDirectories) {
+    const filename = findProjectContextFile(directory);
+    if (!filename) continue;
+
+    const label = directory === selectedDir
+      ? 'working directory'
+      : directory === rootDir
+        ? 'context root'
+        : 'parent context';
+
+    fileLines.push(`- ${join(directory, filename)} (${label})`);
+  }
+
+  if (fileLines.length === 0) {
     return '';
   }
 
-  // Format file list with (root) annotation for top-level files. Paths are
-  // relative to contextRoot, which may be a git repository root when the
-  // selected working directory is nested inside a repo.
-  const fileList = contextFiles
-    .map((file) => {
-      const sanitized = sanitizePromptLine(file, PROJECT_CONTEXT_FILES_TAGS);
-      const isRoot = !sanitized.includes('/');
-      return `- ${sanitized}${isRoot ? ' (root)' : ''}`;
-    })
-    .join('\n');
-
-  const workingDirectoryAttr = escapePromptXmlAttr(workingDirectory);
-  const contextRootAttr = escapePromptXmlAttr(contextRoot);
-
   return `
-<project_context_files working_directory="${workingDirectoryAttr}" context_root="${contextRootAttr}">
-${fileList}
+<project_context_files working_directory="${escapePromptXmlAttr(workingDirectory)}">
+${fileLines.join('\n')}
 </project_context_files>`;
 }
 
@@ -423,8 +492,11 @@ export function getSystemPrompt(
   const preferences = pinnedPreferencesPrompt ?? formatPreferencesForPrompt();
   const debugContext = debugMode?.enabled ? formatDebugModeContext(debugMode.logFilePath) : '';
 
-  // Get project context files for monorepo support (lives in system prompt for persistence across compaction)
-  const projectContextFiles = getProjectContextFilesPrompt(workingDirectory);
+  // Get project context files for monorepo support (lives in system prompt for persistence across compaction).
+  // Use the configured default working directory as the context root when available; workspaceRootPath is
+  // the Craft workspace storage folder, which may be different from the user's project root.
+  const projectContextRootDirectory = getProjectContextRootDirectory(workspaceRootPath);
+  const projectContextFiles = getProjectContextFilesPrompt(workingDirectory, projectContextRootDirectory);
 
   // Optional workspace-project context (injected after preferences, before debug+context-files)
   const projectBlock = projectContext ? formatProjectContextForPrompt(projectContext) : '';
@@ -696,9 +768,10 @@ Skills are stored at three levels (checked in order):
 
 ## Project Context
 
-When \`<project_context_files>\` appears in the system prompt, it lists discovered context files (CLAUDE.md, AGENTS.md). In git repositories, paths are relative to \`context_root\` and are filtered toward the selected working directory so monorepo package sessions still see root and path-specific guidance.
+When \`<project_context_files>\` appears in the system prompt, it lists existing context files (AGENTS.md, CLAUDE.md) for the current working directory. If the working directory is under the context root (the workspace default working directory when set, otherwise the workspace root), it lists context files along the path from context root to working directory. If the working directory is outside the context root, it lists the context root file followed by the selected working directory's context file.
 
-Read relevant context files using the Read tool - they contain architecture info, conventions, and project-specific guidance. Read the root file first, then path/package-specific files as needed.
+**CRITICAL INSTRUCTION**: You MUST read ALL listed files using the Read tool, from root to working directory.
+**Priority Rule**: The closest file to the working directory wins. Rules in the working directory override parent rules, and parent rules override root rules.
 
 ## Configuration Documentation
 
