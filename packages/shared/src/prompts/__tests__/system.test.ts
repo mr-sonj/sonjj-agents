@@ -1,4 +1,7 @@
-import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { join } from 'path'
+import { tmpdir } from 'os'
 
 // Stub the preferences module so we can toggle `getCoAuthorPreference` per test
 // without touching disk. `formatPreferencesForPrompt` is stubbed to '' because
@@ -16,6 +19,7 @@ import {
   getSystemPrompt,
   getWorkingDirectoryContext,
   formatProjectContextForPrompt,
+  getProjectContextFilesPrompt,
 } from '../system'
 import type { ProjectPromptContext } from '../../projects/types.ts'
 
@@ -102,6 +106,220 @@ describe('system prompt guidance', () => {
 
     expect(prompt).toContain('The subtask needs file/shell tools (for example, Read or Bash)')
     expect(prompt).not.toContain('The subtask needs tools (Read, Bash, Grep)')
+  })
+})
+
+describe('getProjectContextFilesPrompt', () => {
+  let tempDir: string | undefined
+
+  afterEach(() => {
+    if (tempDir) {
+      rmSync(tempDir, { recursive: true, force: true })
+      tempDir = undefined
+    }
+  })
+
+  function createWorkspace(): { root: string; selected: string } {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-chain-'))
+    const root = join(tempDir, 'MyMind')
+    const parent = join(root, '03-Workspace')
+    const selected = join(parent, 'airtable-manage-seo')
+    const sibling = join(root, '99-Archive')
+    const selectedChild = join(selected, 'nested')
+
+    mkdirSync(selectedChild, { recursive: true })
+    mkdirSync(sibling, { recursive: true })
+    writeFileSync(join(root, 'AGENTS.md'), '# root')
+    writeFileSync(join(parent, 'AGENTS.md'), '# parent')
+    writeFileSync(join(selected, 'AGENTS.md'), '# selected')
+    writeFileSync(join(sibling, 'AGENTS.md'), '# sibling')
+    writeFileSync(join(selectedChild, 'AGENTS.md'), '# selected child')
+
+    return { root, selected }
+  }
+
+  it('lists only existing context files from workspace root to selected working directory', () => {
+    const { root, selected } = createWorkspace()
+
+    const prompt = getProjectContextFilesPrompt(selected, root)
+
+    expect(prompt.indexOf(join(root, 'AGENTS.md'))).toBeLessThan(prompt.indexOf(join(root, '03-Workspace', 'AGENTS.md')))
+    expect(prompt.indexOf(join(root, '03-Workspace', 'AGENTS.md'))).toBeLessThan(prompt.indexOf(join(selected, 'AGENTS.md')))
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (context root)`)
+    expect(prompt).toContain(`- ${join(root, '03-Workspace', 'AGENTS.md')} (parent context)`)
+    expect(prompt).toContain(`- ${join(selected, 'AGENTS.md')} (working directory)`)
+    expect(prompt).not.toContain(join(root, '99-Archive', 'AGENTS.md'))
+    expect(prompt).not.toContain(join(selected, 'nested', 'AGENTS.md'))
+  })
+
+  it('limits context files search to max 3 levels (root, parent, selected) for deeply nested directories', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-deep-'))
+    const root = join(tempDir, 'Root')
+    const level1 = join(root, 'level1')
+    const level2 = join(level1, 'level2')
+    const level3 = join(level2, 'level3')
+    const selected = join(level3, 'selected')
+
+    mkdirSync(selected, { recursive: true })
+    writeFileSync(join(root, 'AGENTS.md'), '# root')
+    writeFileSync(join(level1, 'AGENTS.md'), '# level1')
+    writeFileSync(join(level2, 'AGENTS.md'), '# level2')
+    writeFileSync(join(level3, 'AGENTS.md'), '# level3')
+    writeFileSync(join(selected, 'AGENTS.md'), '# selected')
+
+    const prompt = getProjectContextFilesPrompt(selected, root)
+
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (context root)`)
+    expect(prompt).toContain(`- ${join(level3, 'AGENTS.md')} (parent context)`)
+    expect(prompt).toContain(`- ${join(selected, 'AGENTS.md')} (working directory)`)
+    expect(prompt).not.toContain(join(level1, 'AGENTS.md'))
+    expect(prompt).not.toContain(join(level2, 'AGENTS.md'))
+  })
+
+  it('skips missing context files without requiring every directory to have one', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-missing-'))
+    const root = join(tempDir, 'MyMind')
+    const parent = join(root, '03-Workspace')
+    const selected = join(parent, 'airtable-manage-seo')
+    mkdirSync(selected, { recursive: true })
+    writeFileSync(join(parent, 'AGENTS.md'), '# parent only')
+
+    const prompt = getProjectContextFilesPrompt(selected, root)
+
+    expect(prompt).toContain(`- ${join(parent, 'AGENTS.md')} (parent context)`)
+    expect(prompt).not.toContain(join(root, 'AGENTS.md'))
+    expect(prompt).not.toContain(join(selected, 'AGENTS.md'))
+  })
+
+  it('lists both workspace root and selected folder context when working directory is outside workspace root', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-outside-'))
+    const root = join(tempDir, 'MyMind')
+    const selected = join(tempDir, 'OtherProject')
+    mkdirSync(root, { recursive: true })
+    mkdirSync(selected, { recursive: true })
+    writeFileSync(join(root, 'AGENTS.md'), '# root')
+    writeFileSync(join(selected, 'AGENTS.md'), '# selected')
+
+    const prompt = getProjectContextFilesPrompt(selected, root)
+
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (context root)`)
+    expect(prompt).toContain(`- ${join(selected, 'AGENTS.md')} (working directory)`)
+  })
+
+  it('does not treat a path with the same prefix as inside the workspace root', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-prefix-'))
+    const root = join(tempDir, 'MyMind')
+    const selected = join(tempDir, 'MyMind-Other')
+    mkdirSync(root, { recursive: true })
+    mkdirSync(selected, { recursive: true })
+    writeFileSync(join(root, 'AGENTS.md'), '# root')
+    writeFileSync(join(selected, 'AGENTS.md'), '# selected')
+
+    const prompt = getProjectContextFilesPrompt(selected, root)
+
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (context root)`)
+    expect(prompt).toContain(`- ${join(selected, 'AGENTS.md')} (working directory)`)
+  })
+
+  it('lists only the root context when selected working directory is the workspace root', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-root-'))
+    const root = join(tempDir, 'MyMind')
+    const child = join(root, '03-Workspace')
+    mkdirSync(child, { recursive: true })
+    writeFileSync(join(root, 'AGENTS.md'), '# root')
+    writeFileSync(join(child, 'AGENTS.md'), '# child')
+
+    const prompt = getProjectContextFilesPrompt(root, root)
+
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (working directory)`)
+    expect(prompt).not.toContain(join(child, 'AGENTS.md'))
+  })
+
+  it('prefers AGENTS.md over CLAUDE.md when both exist in the same directory', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-priority-'))
+    const root = join(tempDir, 'MyMind')
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'AGENTS.md'), '# agents')
+    writeFileSync(join(root, 'CLAUDE.md'), '# claude')
+
+    const prompt = getProjectContextFilesPrompt(root, root)
+
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (working directory)`)
+    expect(prompt).not.toContain(join(root, 'CLAUDE.md'))
+  })
+
+  it('falls back to CLAUDE.md when AGENTS.md is absent', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-claude-'))
+    const root = join(tempDir, 'MyMind')
+    mkdirSync(root, { recursive: true })
+    writeFileSync(join(root, 'CLAUDE.md'), '# claude')
+
+    const prompt = getProjectContextFilesPrompt(root, root)
+
+    expect(prompt).toContain(`- ${join(root, 'CLAUDE.md')} (working directory)`)
+  })
+
+  it('returns an empty prompt when no context files exist on the selected path', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-empty-'))
+    const root = join(tempDir, 'MyMind')
+    const selected = join(root, '03-Workspace')
+    mkdirSync(selected, { recursive: true })
+
+    expect(getProjectContextFilesPrompt(selected, root)).toBe('')
+  })
+
+  it('uses workspace default working directory as context root in the full system prompt', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-default-root-'))
+    const workspaceStorage = join(tempDir, 'workspace-storage')
+    const root = join(tempDir, 'MyMind')
+    const parent = join(root, '03-Workspace')
+    const selected = join(parent, 'airtable-manage-seo')
+    mkdirSync(workspaceStorage, { recursive: true })
+    mkdirSync(selected, { recursive: true })
+    writeFileSync(join(workspaceStorage, 'config.json'), JSON.stringify({
+      id: 'ws',
+      name: 'Workspace',
+      slug: 'workspace',
+      defaults: { workingDirectory: root },
+      createdAt: 0,
+      updatedAt: 0,
+    }))
+    writeFileSync(join(workspaceStorage, 'AGENTS.md'), '# storage root should not apply')
+    writeFileSync(join(root, 'AGENTS.md'), '# root')
+    writeFileSync(join(parent, 'AGENTS.md'), '# parent')
+    writeFileSync(join(selected, 'AGENTS.md'), '# selected')
+
+    const prompt = getSystemPrompt(undefined, undefined, workspaceStorage, selected, undefined, undefined, false)
+
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (context root)`)
+    expect(prompt).toContain(`- ${join(parent, 'AGENTS.md')} (parent context)`)
+    expect(prompt).toContain(`- ${join(selected, 'AGENTS.md')} (working directory)`)
+    expect(prompt).not.toContain(join(workspaceStorage, 'AGENTS.md'))
+  })
+
+  it('uses both workspace default root and selected folder context in full system prompt when selected path is outside default working directory', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-default-outside-'))
+    const workspaceStorage = join(tempDir, 'workspace-storage')
+    const root = join(tempDir, 'MyMind')
+    const selected = join(tempDir, 'OtherProject')
+    mkdirSync(workspaceStorage, { recursive: true })
+    mkdirSync(root, { recursive: true })
+    mkdirSync(selected, { recursive: true })
+    writeFileSync(join(workspaceStorage, 'config.json'), JSON.stringify({
+      id: 'ws',
+      name: 'Workspace',
+      slug: 'workspace',
+      defaults: { workingDirectory: root },
+      createdAt: 0,
+      updatedAt: 0,
+    }))
+    writeFileSync(join(root, 'AGENTS.md'), '# default root')
+    writeFileSync(join(selected, 'AGENTS.md'), '# selected')
+
+    const prompt = getSystemPrompt(undefined, undefined, workspaceStorage, selected, undefined, undefined, false)
+
+    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (context root)`)
+    expect(prompt).toContain(`- ${join(selected, 'AGENTS.md')} (working directory)`)
   })
 })
 
