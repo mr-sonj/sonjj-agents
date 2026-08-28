@@ -129,12 +129,14 @@ export function useWorkingDirectoryState(
     onClose()
   }, [onWorkingDirectoryChange, onClose, workspaceId])
 
+  // Send '' and let the server resolve the target: it is the workspace's project folder
+  // (settings → working directory), which only the server knows for a remote workspace.
+  // sessionFolderPath is the session's own storage folder under ~/.craft-agent/workspaces,
+  // so resetting to it used to drop the session into the app's internal files.
   const handleReset = React.useCallback(() => {
-    if (sessionFolderPath) {
-      onWorkingDirectoryChange(sessionFolderPath)
-      onClose()
-    }
-  }, [onWorkingDirectoryChange, onClose, sessionFolderPath])
+    onWorkingDirectoryChange('')
+    onClose()
+  }, [onWorkingDirectoryChange, onClose])
 
   const handleRemoveRecent = React.useCallback((e: React.MouseEvent, path: string) => {
     e.stopPropagation()
