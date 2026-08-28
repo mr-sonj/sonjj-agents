@@ -39,7 +39,8 @@ import {
   type WorkspaceInfo,
 } from '@craft-agent/shared/config'
 import type { ActiveSessionInfo, ContextUsageSnapshot, PermissionRisk, SessionProcessingStatus } from '@craft-agent/core/types'
-import { loadWorkspaceConfig } from '@craft-agent/shared/workspaces'
+import { loadWorkspaceConfig, saveWorkspaceConfig } from '@craft-agent/shared/workspaces'
+import { resolveNewSessionWorkingDirectory, resolveWorkingDirectoryUpdate, normalizeDirPath } from './working-directory'
 import {
   // Session persistence functions
   listSessions as listStoredSessions,
@@ -3079,7 +3080,8 @@ export class SessionManager implements ISessionManager {
       ?? wsConfig?.defaults?.permissionMode
       ?? globalDefaults.workspaceDefaults.permissionMode
 
-    const userDefaultWorkingDir = wsConfig?.defaults?.workingDirectory || undefined
+    // Folder remembered from an earlier pick wins; otherwise the configured project folder.
+    const userDefaultWorkingDir = resolveNewSessionWorkingDirectory(wsConfig?.defaults)
     // Resolve thinking level with caller-first precedence, matching permissionMode above:
     //   caller override → workspace default → global default.
     // normalizeThinkingLevel() tolerates undefined/unknown inputs.
@@ -5979,10 +5981,37 @@ export class SessionManager implements ISessionManager {
    * so the SDK will use the new path for transcript storage. This prevents the
    * confusing "bash shell runs from a different directory" warning when the user
    * changes the working directory before their first message.
+   *
+   * An empty `path` means "reset": the session goes back to the workspace's project
+   * folder (`defaults.workingDirectory`). The renderer sends '' rather than a concrete
+   * path so a remote server resolves its own folder, never the client's local one.
+   *
+   * The pick is remembered under `defaults.lastSessionWorkingDirectory` so the next new
+   * session starts in the same folder, and a reset clears it. Callers that are not acting
+   * on a user's folder choice (task-draft adoption) pass `persistAsDefault: false`.
    */
-  updateWorkingDirectory(sessionId: string, path: string): void {
+  updateWorkingDirectory(sessionId: string, path: string, opts?: { persistAsDefault?: boolean }): void {
     const managed = this.sessions.get(sessionId)
     if (managed) {
+      const wsConfig = loadWorkspaceConfig(managed.workspace.rootPath)
+      const isReset = !normalizeDirPath(path)
+      const resolved = resolveWorkingDirectoryUpdate(path, wsConfig?.defaults?.workingDirectory)
+      if (!resolved) {
+        // Reset with no project folder configured. workspace.rootPath is deliberately not a
+        // fallback: it is the app's internal storage folder (~/.craft-agent/workspaces/<slug>),
+        // never what a user means by "back to the project".
+        sessionLog.warn(`Session ${sessionId}: reset ignored — workspace has no project folder configured`)
+        this.sendEvent({
+          type: 'working_directory_error',
+          sessionId,
+          error: 'No project folder is set for this workspace. Set one in Workspace Settings.',
+        }, managed.workspace.id)
+        return
+      }
+      // Reassigned so the rest of this method — and the events it emits — work on the
+      // resolved target rather than the '' a reset arrives as.
+      path = resolved
+
       const validation = isValidWorkingDirectory(path)
       if (!validation.valid) {
         sessionLog.warn(`Session ${sessionId}: rejected working directory "${path}" — ${validation.reason}`)
@@ -6025,6 +6054,15 @@ export class SessionManager implements ISessionManager {
       this.persistSession(managed)
       // Notify renderer of the working directory change
       this.sendEvent({ type: 'working_directory_changed', sessionId, workingDirectory: path }, managed.workspace.id)
+
+      // Remember the folder for the next new session. Written under its own key so it never
+      // overwrites the project folder the user configured in Workspace Settings.
+      if (opts?.persistAsDefault !== false && wsConfig) {
+        wsConfig.defaults = wsConfig.defaults || {}
+        if (isReset) delete wsConfig.defaults.lastSessionWorkingDirectory
+        else wsConfig.defaults.lastSessionWorkingDirectory = path
+        saveWorkspaceConfig(managed.workspace.rootPath, wsConfig)
+      }
     }
   }
 
@@ -8095,7 +8133,9 @@ export class SessionManager implements ISessionManager {
     // and per-field events stay consistent — not just the on-disk metadata (the split-brain the
     // follow-up review flagged). Each targets only the changed field; persist below captures the mode.
     if (modelChanged) await this.updateSessionModel(sessionId, managed.workspace.id, reconcile!.model!)
-    if (cwdChanged) this.updateWorkingDirectory(sessionId, reconcile!.workingDirectory!)
+    // persistAsDefault: false — promoting a draft is not the user picking a folder in the
+    // chat picker, so it must not become the folder every new session opens in.
+    if (cwdChanged) this.updateWorkingDirectory(sessionId, reconcile!.workingDirectory!, { persistAsDefault: false })
     if (modeChanged) this.setSessionPermissionMode(sessionId, reconcile!.permissionMode!)
 
     this.setMetadataWriteGuard(managed)
@@ -8182,7 +8222,9 @@ export class SessionManager implements ISessionManager {
     // and per-field events stay consistent — not just the on-disk metadata (the split-brain the
     // follow-up review flagged). updateSessionModel emits session_model_changed itself.
     if (modelChanged) await this.updateSessionModel(sessionId, managed.workspace.id, reconcile!.model!)
-    if (cwdChanged) this.updateWorkingDirectory(sessionId, reconcile!.workingDirectory!)
+    // persistAsDefault: false — promoting a draft is not the user picking a folder in the
+    // chat picker, so it must not become the folder every new session opens in.
+    if (cwdChanged) this.updateWorkingDirectory(sessionId, reconcile!.workingDirectory!, { persistAsDefault: false })
     if (modeChanged) this.setSessionPermissionMode(sessionId, reconcile!.permissionMode!)
 
     this.setMetadataWriteGuard(managed)
