@@ -1,5 +1,5 @@
 import { query, createSdkMcpServer, tool, AbortError, type Query, type SDKMessage, type SDKUserMessage, type SDKAssistantMessageError, type Options } from '@anthropic-ai/claude-agent-sdk';
-import { getDefaultOptions, resetClaudeConfigCheck } from './options.ts';
+import { engineLoadsClaudeMd, getDefaultOptions, resetClaudeConfigCheck } from './options.ts';
 // Local type for SDK user message content blocks (text, image, document)
 // Replaces import from @anthropic-ai/sdk/resources — keeps SDK as agent-only dependency
 type ContentBlockParam =
@@ -1205,9 +1205,10 @@ export class ClaudeAgent extends BaseAgent {
       // field) so the catch handler reads the value passed to *this*
       // chatImpl invocation, not state left over from an earlier call.
       const resolvedCwd = this.resolveSpawnCwd({ isRetry: _isRetry, sessionId });
+      const defaultOptions = getDefaultOptions(this.config.envOverrides);
 
       const options: Options = {
-        ...getDefaultOptions(this.config.envOverrides),
+        ...defaultOptions,
         model: effectiveModel,
         // Capture stderr from SDK subprocess for error diagnostics
         // This helps identify why sessions fail with "process exited with code 1"
@@ -1275,6 +1276,9 @@ export class ClaudeAgent extends BaseAgent {
                 undefined, // backendName
                 this.pinnedIncludeCoAuthoredBy ?? undefined,
                 this.pinnedProjectContext ?? undefined,
+                // The engine loads CLAUDE.md from its cwd and every ancestor itself;
+                // the context file list leaves those out instead of asking for a re-read.
+                defaultOptions.env && engineLoadsClaudeMd(defaultOptions.env) ? resolvedCwd : undefined,
               ),
             },
         // Use sdkCwd for SDK session storage - this is set once at session creation and never changes.
