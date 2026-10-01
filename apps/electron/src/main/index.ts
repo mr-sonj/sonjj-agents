@@ -108,7 +108,7 @@ import { setPerfEnabled, enableDebug } from '@craft-agent/shared/utils'
 import { registerPiModelResolver } from '@craft-agent/shared/config'
 import { getPiModelsForAuthProvider, getAllPiModels } from '@craft-agent/shared/config'
 import { initNotificationService, initBadgeIcon, initInstanceBadge, updateBadgeCount } from './notifications'
-import { checkForUpdatesOnLaunch, setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook, setBeforeUpdateInstallHook, setInstallQuitFailedHook } from './auto-update'
+import { setAutoUpdateEventSink, isUpdating, setBeforeUpdateQuitHook, setBeforeUpdateInstallHook, setInstallQuitFailedHook } from './auto-update'
 import type { EventSink } from '@craft-agent/server-core/transport'
 import { validateGitBashPath, checkVCRedistInstalled } from '@craft-agent/server-core/services'
 
@@ -1103,8 +1103,7 @@ app.whenReady().then(async () => {
       mainLog.warn('Failed to set Sentry context tags:', err)
     }
 
-    // Initialize auto-update (check immediately on launch)
-    // Skip in dev mode to avoid replacing /Applications app and launching it instead
+    // Initialize update handling for user-initiated checks.
     if (moduleSink) setAutoUpdateEventSink(moduleSink)
     // Snapshot multi-window state BEFORE quitAndInstall. electron-updater
     // (Squirrel.Mac) destroys BrowserWindows between quitAndInstall and
@@ -1134,14 +1133,6 @@ app.whenReady().then(async () => {
       app.relaunch()
       app.exit(0)
     })
-    if (app.isPackaged) {
-      checkForUpdatesOnLaunch().catch(err => {
-        mainLog.error('[auto-update] Launch check failed:', err)
-      })
-    } else {
-      mainLog.info('[auto-update] Skipping auto-update in dev mode')
-    }
-
     // Process pending deep link from cold start
     if (pendingDeepLink) {
       mainLog.info('Processing pending deep link:', pendingDeepLink)
