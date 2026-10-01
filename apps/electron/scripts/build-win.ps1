@@ -1,5 +1,6 @@
 # Build script for Windows NSIS installer
 # Usage: powershell -ExecutionPolicy Bypass -File scripts/build-win.ps1
+# Keep this file ASCII-only for Windows PowerShell 5.1 compatibility (UTF-8 without BOM is read as ANSI).
 
 $ErrorActionPreference = "Stop"
 
@@ -169,12 +170,13 @@ Remove-Item -Recurse -Force "$ElectronDir\node_modules\@anthropic-ai\claude-agen
 Copy-Item -Recurse -Force $SdkSource "$ElectronDir\node_modules\@anthropic-ai\"
 
 # 4a. Resolve the target arch's binary package (cross-fetch from npm if absent).
-# Target arch is hard-coded x64 — Windows arm64 is not currently shipped.
+# Target arch is hard-coded x64 - Windows arm64 is not currently shipped.
 $SdkBinPkg = "claude-agent-sdk-win32-x64"
 $SdkBinSource = "$RootDir\node_modules\@anthropic-ai\$SdkBinPkg"
 if (-not (Test-Path $SdkBinSource)) {
-    Write-Host "Cross-arch build: $SdkBinPkg not in node_modules — fetching from npm..."
-    $SdkVersion = (node -p "require('$RootDir/package.json'.replace(/\\/g, '/')).dependencies['@anthropic-ai/claude-agent-sdk']").Trim('"')
+    Write-Host "Cross-arch build: $SdkBinPkg not in node_modules - fetching from npm..."
+    $PackageJson = Get-Content -Raw -Path "$RootDir\package.json" | ConvertFrom-Json
+    $SdkVersion = $PackageJson.dependencies.'@anthropic-ai/claude-agent-sdk'
     $PkgTmp = New-Item -ItemType Directory -Path ([System.IO.Path]::Combine($env:TEMP, [System.Guid]::NewGuid().ToString()))
     try {
         Push-Location $PkgTmp
@@ -225,7 +227,7 @@ Remove-Item -Recurse -Force "$ElectronDir\node_modules\@vscode\ripgrep" -ErrorAc
 Copy-Item -Recurse -Force $RgSource "$ElectronDir\node_modules\@vscode\"
 
 # 6. Copy network interceptor sources (for Pi subprocess; Claude no longer
-#    uses --preload — Phase 2 will move that to SDK hooks or a local proxy).
+#    uses --preload - Phase 2 will move that to SDK hooks or a local proxy).
 $InterceptorSource = "$RootDir\packages\shared\src\unified-network-interceptor.ts"
 if (-not (Test-Path $InterceptorSource)) {
     Write-Host "ERROR: Interceptor not found at $InterceptorSource" -ForegroundColor Red
@@ -256,7 +258,7 @@ $MainArgs = @(
     # SDK 0.3.x is pure ESM and calls createRequire(import.meta.url) at module init.
     # esbuild's CJS bundling leaves import.meta.url undefined for inlined ESM, crashing
     # the app on load (ERR_INVALID_ARG_VALUE). Externalize it so Node loads it natively
-    # as ESM — the SDK core is staged into the app's node_modules above (step 4).
+    # as ESM - the SDK core is staged into the app's node_modules above (step 4).
     # Must stay in sync with package.json build:main and scripts/electron-dev.ts.
     "--external:@anthropic-ai/claude-agent-sdk"
 )
@@ -316,7 +318,7 @@ try {
 }
 
 # Copy all resources and bundled assets using the shared script.
-# Single source of truth — matches Mac/Linux build (bun run build:copy).
+# Single source of truth - matches Mac/Linux build (bun run build:copy).
 # Copies: resources (icons, DMG bg), docs, tool-icons, themes, permissions, config-defaults.
 Write-Host "  Copying resources and bundled assets..."
 Push-Location $ElectronDir
