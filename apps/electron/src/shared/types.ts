@@ -220,9 +220,12 @@ import type {
   OAuthResult,
   McpToolsResult,
   GitBashStatus,
-  ClaudeOAuthIdentityDto,
+  ClaudeOAuthResult,
+  UpdateInfo,
+  WorkspaceSettings,
   PermissionModeState,
   BrowserInstanceInfo,
+  DeepLinkNavigation,
   TestAutomationPayload,
   TestAutomationResult,
   WindowCloseRequest,
@@ -843,77 +846,6 @@ export type WhatsAppUiEvent =
 // =============================================================================
 // Navigation types (renderer-only)
 // =============================================================================
-/**
- * Result from Claude OAuth (setup-token) flow
- */
-export interface ClaudeOAuthResult {
-  success: boolean
-  token?: string
-  error?: string
-  identity?: ClaudeOAuthIdentityDto
-}
-
-/**
- * Current API setup info for settings
- */
-/**
- * Auto-update information
- */
-export interface UpdateInfo {
-  /** Whether an update is available */
-  available: boolean
-  /** Current installed version */
-  currentVersion: string
-  /** Latest available version (null if check failed) */
-  latestVersion: string | null
-  /** Download state */
-  downloadState: 'idle' | 'downloading' | 'ready' | 'installing' | 'error'
-  /** Download progress (0-100) */
-  downloadProgress: number
-  /** Error message if download/install failed */
-  error?: string
-}
-
-/**
- * Per-workspace settings
- */
-export interface WorkspaceSettings {
-  name?: string
-  model?: string
-  permissionMode?: PermissionMode
-  /** Permission modes available for SHIFT+TAB cycling (min 2 modes) */
-  cyclablePermissionModes?: PermissionMode[]
-  /** Default thinking level for new sessions ('off', 'think', 'max'). Defaults to 'think'. */
-  thinkingLevel?: ThinkingLevel
-  workingDirectory?: string
-  /** Custom directory path for skills. Undefined = uses {workspaceRoot}/skills/ */
-  skillsDirectory?: string
-  /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/ */
-  sourcesDirectory?: string
-  /** Whether local (stdio) MCP servers are enabled */
-  localMcpEnabled?: boolean
-  /** Default LLM connection slug for new sessions in this workspace */
-  defaultLlmConnection?: string
-  /** Source slugs to auto-enable for new sessions */
-  enabledSourceSlugs?: string[]
-}
-
-/**
- * Navigation payload for deep links (main → renderer)
- */
-export interface DeepLinkNavigation {
-  /** Compound route format (e.g., 'allSessions/session/abc123', 'settings/shortcuts') */
-  view?: string
-  /** Tab type */
-  tabType?: string
-  tabParams?: Record<string, string>
-  action?: string
-  actionParams?: Record<string, string>
-}
-
-// ============================================
-// Unified Navigation State Types
-// ============================================
 
 /**
  * Right sidebar panel types

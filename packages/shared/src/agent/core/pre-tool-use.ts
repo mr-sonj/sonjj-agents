@@ -266,18 +266,17 @@ function resolveSkillPlugin(
 ): string {
   // Priority order matches loadAllSkills: project (highest) > workspace > global (lowest)
 
-  // 1. Project (highest priority): {workingDir}/.agents/skills/{slug}/SKILL.md
+  // 1. Project: {workingDir}/.agents/skills/{slug}/SKILL.md
   if (workingDirectory && existsSync(join(workingDirectory, PROJECT_AGENT_SKILLS_DIR, bareSlug, 'SKILL.md'))) {
     return `${AGENTS_PLUGIN_NAME}:${bareSlug}`;
   }
 
-  // 2. Workspace (medium priority): uses getWorkspaceSkillsPath to respect custom skillsDirectory config
-  const workspaceSkillsDir = getWorkspaceSkillsPath(workspaceRootPath);
-  if (existsSync(join(workspaceSkillsDir, bareSlug, 'SKILL.md'))) {
+  // 2. Workspace: {workspaceRoot}/skills/{slug}/SKILL.md, or the custom skillsDirectory
+  if (existsSync(join(getWorkspaceSkillsPath(workspaceRootPath), bareSlug, 'SKILL.md'))) {
     return `${workspaceSlug}:${bareSlug}`;
   }
 
-  // 3. Global (lowest priority): ~/.agents/skills/{slug}/SKILL.md
+  // 3. Global: ~/.agents/skills/{slug}/SKILL.md
   if (existsSync(join(GLOBAL_AGENT_SKILLS_DIR, bareSlug, 'SKILL.md'))) {
     return `${AGENTS_PLUGIN_NAME}:${bareSlug}`;
   }
@@ -896,9 +895,9 @@ export function runPreToolUseChecks(ctx: PreToolUseInput): PreToolUseCheckResult
     if (promptInfo) {
       const adminWrappedInput =
         promptInfo.promptType === 'admin_approval' &&
-          promptInfo.command &&
-          typeof currentInput.command === 'string' &&
-          process.platform === 'darwin'
+        promptInfo.command &&
+        typeof currentInput.command === 'string' &&
+        process.platform === 'darwin'
           ? { ...currentInput, command: wrapCommandForMacAdminPrompt(promptInfo.command) }
           : undefined;
 

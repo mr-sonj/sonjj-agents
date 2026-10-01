@@ -14,7 +14,6 @@ import { existsSync } from 'node:fs';
 import { resolve, join } from 'node:path';
 import { expandPath } from './path-processor.ts';
 import { getWorkspaceSourcesPath } from '../../workspaces/storage.ts';
-import { isBrowserToolNameOrAlias } from '../browser-tool-names.ts';
 import { getBrowserToolEnabled } from '../../config/storage.ts';
 import { CONFIG_DIR } from '../../config/paths.ts';
 

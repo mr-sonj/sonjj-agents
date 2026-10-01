@@ -2049,14 +2049,6 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
-   * Set up ConfigWatcher for a workspace to broadcast live updates
-   * (sources added/removed, guide.md changes, etc.)
-   * Called eagerly at boot for all workspaces (automations/scheduler) and
-   * on client connect (GET_WORKSPACE / SWITCH_WORKSPACE).
-   * Idempotent — returns immediately if already watching.
-   * workspaceId must be the global config ID (what the renderer knows).
-   */
-  /**
    * Immediately refresh skills/sources directory paths for a workspace after settings change.
    * Called from IPC when skillsDirectory or sourcesDirectory is updated.
    * More reliable than waiting for the file system watcher to detect config.json changes.
@@ -2065,6 +2057,14 @@ export class SessionManager implements ISessionManager {
     this.configWatchers.get(workspaceRootPath)?.updateDirectoryPaths()
   }
 
+  /**
+   * Set up ConfigWatcher for a workspace to broadcast live updates
+   * (sources added/removed, guide.md changes, etc.)
+   * Called eagerly at boot for all workspaces (automations/scheduler) and
+   * on client connect (GET_WORKSPACE / SWITCH_WORKSPACE).
+   * Idempotent — returns immediately if already watching.
+   * workspaceId must be the global config ID (what the renderer knows).
+   */
   setupConfigWatcher(workspaceRootPath: string, workspaceId: string): void {
     // Check if already watching this workspace
     if (this.configWatchers.has(workspaceRootPath)) {
