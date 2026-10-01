@@ -21,10 +21,7 @@ import * as path from 'path'
 import * as fs from 'fs'
 import { mainLog, autoUpdateLog } from './logger'
 import { getAppVersion } from '@craft-agent/shared/version'
-import {
-  getDismissedUpdateVersion,
-  clearDismissedUpdateVersion,
-} from '@craft-agent/shared/config'
+import { clearDismissedUpdateVersion } from '@craft-agent/shared/config'
 import { readJsonFileSync } from '@craft-agent/shared/utils/files'
 import { RPC_CHANNELS, type UpdateInfo } from '../shared/types'
 import type { EventSink } from '@craft-agent/server-core/transport'
@@ -473,43 +470,4 @@ export async function installUpdate(): Promise<void> {
     }
     throw error
   }
-}
-
-/**
- * Result of update check on launch
- */
-export interface UpdateOnLaunchResult {
-  action: 'none' | 'skipped' | 'ready' | 'downloading'
-  reason?: string
-  version?: string | null
-}
-
-/**
- * Check for updates on app launch.
- * - Checks immediately (no delay)
- * - Respects dismissed version (skips notification but allows manual check)
- * - Auto-downloads if update available
- */
-export async function checkForUpdatesOnLaunch(): Promise<UpdateOnLaunchResult> {
-  autoUpdateLog.info('Checking for updates on launch...')
-
-  const info = await checkForUpdates({ autoDownload: true })
-
-  if (!info.available) {
-    return { action: 'none' }
-  }
-
-  // Check if this version was dismissed by user
-  const dismissedVersion = getDismissedUpdateVersion()
-  if (dismissedVersion === info.latestVersion) {
-    mainLog.info(`[auto-update] Update ${info.latestVersion} was dismissed, skipping notification`)
-    return { action: 'skipped', reason: 'dismissed', version: info.latestVersion }
-  }
-
-  if (info.downloadState === 'ready') {
-    return { action: 'ready', version: info.latestVersion }
-  }
-
-  // Download in progress — will notify when ready via update-downloaded event
-  return { action: 'downloading', version: info.latestVersion }
 }
