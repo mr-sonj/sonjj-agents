@@ -46,7 +46,7 @@ export interface WorkspaceConfig {
     permissionMode?: PermissionMode; // Default permission mode ('safe', 'ask', 'guarded', 'allow-all')
     cyclablePermissionModes?: PermissionMode[]; // Which modes can be cycled with SHIFT+TAB (min 2, default: Explore, Ask, Execute)
     workingDirectory?: string;
-    thinkingLevel?: ThinkingLevel; // Default thinking level ('off', 'low', 'medium', 'high', 'max') - default: 'medium'
+    thinkingLevel?: ThinkingLevel; // Default thinking level for new sessions (default: 'medium')
     /** Custom directory path for skills. Undefined = uses {workspaceRoot}/skills/ */
     skillsDirectory?: string;
     /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/ */

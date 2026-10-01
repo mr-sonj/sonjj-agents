@@ -15,7 +15,6 @@ import { parseError, type AgentError } from './errors.ts';
 import { mapClaudeSdkAssistantError, type ClaudeSdkApiError } from './claude-sdk-error-mapper.ts';
 import { runErrorDiagnostics } from './diagnostics.ts';
 import { loadStoredConfig, loadConfigDefaults, type Workspace, type AuthType, getDefaultLlmConnection, getLlmConnection } from '../config/storage.ts';
-
 import { getValidClaudeOAuthToken } from '../auth/state.ts';
 import {
   clearClaudeBedrockRoutingEnvVars,
@@ -186,7 +185,7 @@ export function resolveClaudeThinkingOptions(args: {
   if (supportsAdaptiveThinking) {
     return {
       thinking: { type: 'adaptive' as const },
-      effort: effort as any,
+      effort,
     };
   }
 

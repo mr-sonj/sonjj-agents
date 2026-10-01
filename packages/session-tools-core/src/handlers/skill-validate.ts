@@ -2,7 +2,7 @@
  * Skill Validate Handler
  *
  * Validates a skill's SKILL.md file for correct format and required fields.
- * Resolves skills from all three tiers: workspace > project > global.
+ * Resolves skills from all three tiers: project > workspace > global.
  *
  * The handler resolves the session's workingDirectory on demand from the
  * persisted session.jsonl header — no construction-time propagation needed.
@@ -26,7 +26,7 @@ export interface SkillValidateArgs {
 }
 
 /**
- * Resolve the SKILL.md path by checking all three tiers (workspace > project > global).
+ * Resolve the SKILL.md path by checking all three tiers (project > workspace > global).
  * Returns the first match, or null if not found anywhere.
  */
 function resolveSkillMdPath(
@@ -34,19 +34,18 @@ function resolveSkillMdPath(
   slug: string,
   workingDirectory: string | undefined
 ): { path: string; tier: string } | null {
-  // 1. Workspace-level (highest priority): respects custom skillsDirectory config
-  const skillsDir = resolveSkillsDir(ctx.workspacePath);
-  const workspaceSkillPath = join(skillsDir, slug, 'SKILL.md');
-  if (ctx.fs.exists(workspaceSkillPath)) {
-    return { path: workspaceSkillPath, tier: 'workspace' };
-  }
-
-  // 2. Project-level (medium priority): {projectRoot}/.agents/skills/{slug}/SKILL.md
+  // 1. Project-level (highest priority): {projectRoot}/.agents/skills/{slug}/SKILL.md
   if (workingDirectory) {
     const projectPath = join(workingDirectory, '.agents', 'skills', slug, 'SKILL.md');
     if (ctx.fs.exists(projectPath)) {
       return { path: projectPath, tier: 'project' };
     }
+  }
+
+  // 2. Workspace-level (medium priority): {workspace}/skills/{slug}/SKILL.md, or the custom skillsDirectory
+  const workspacePath = join(resolveSkillsDir(ctx.workspacePath), slug, 'SKILL.md');
+  if (ctx.fs.exists(workspacePath)) {
+    return { path: workspacePath, tier: 'workspace' };
   }
 
   // 3. Global-level (lowest priority): ~/.agents/skills/{slug}/SKILL.md
@@ -89,10 +88,9 @@ export async function handleSkillValidate(
   // Resolve SKILL.md from all three tiers
   const resolved = resolveSkillMdPath(ctx, skillSlug, workingDirectory);
   if (!resolved) {
-    const skillsDir = resolveSkillsDir(ctx.workspacePath);
     const searchedPaths = [
-      `  - ${join(skillsDir, skillSlug, 'SKILL.md')} (workspace)`,
       workingDirectory ? `  - ${join(workingDirectory, '.agents', 'skills', skillSlug, 'SKILL.md')} (project)` : null,
+      `  - ${join(resolveSkillsDir(ctx.workspacePath), skillSlug, 'SKILL.md')} (workspace)`,
       `  - ${join(homedir(), '.agents', 'skills', skillSlug, 'SKILL.md')} (global)`,
     ].filter(Boolean).join('\n');
 

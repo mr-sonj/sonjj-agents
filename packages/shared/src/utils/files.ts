@@ -76,7 +76,6 @@ export function isDirectoryEntry(parentDir: string, entry: import('fs').Dirent |
   return false;
 }
 
-
 export interface FileAttachment {
   type: 'image' | 'text' | 'pdf' | 'office' | 'audio' | 'unknown';
   path: string;
