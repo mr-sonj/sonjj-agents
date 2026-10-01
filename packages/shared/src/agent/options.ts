@@ -221,6 +221,19 @@ export function buildClaudeSubprocessEnv(
     return env;
 }
 
+/**
+ * Whether the engine run with this env loads CLAUDE.md files itself: managed, user
+ * (~/.claude/CLAUDE.md), and CLAUDE.md, .claude/CLAUDE.md, CLAUDE.local.md and
+ * .claude/rules of its cwd and every ancestor (Craft leaves `settingSources` at the
+ * default, which includes them). The system prompt then leaves those CLAUDE.md files
+ * out of `<project_context_files>`. The engine reads CLAUDE_CODE_DISABLE_CLAUDE_MDS
+ * as true for 1/true/yes/on.
+ */
+export function engineLoadsClaudeMd(env: NodeJS.ProcessEnv): boolean {
+    const disabled = env.CLAUDE_CODE_DISABLE_CLAUDE_MDS?.trim().toLowerCase();
+    return !disabled || !['1', 'true', 'yes', 'on'].includes(disabled);
+}
+
 /** Filename of the per-platform native Claude binary inside its npm package. */
 function nativeBinaryName(): string {
     return process.platform === 'win32' ? 'claude.exe' : 'claude';
