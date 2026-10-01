@@ -89,6 +89,9 @@ mac:
     # and prompt for permission. Without it the app is silently denied LAN access
     # and never appears in the privacy pane (craft-agents-oss#938).
     NSLocalNetworkUsageDescription: "Craft Agents uses your local network to reach LAN addresses and devices you ask an agent to access, such as local servers or APIs."
+    NSDocumentsFolderUsageDescription: "Craft Agents requires access to your Documents folder to read and process your files."
+    NSDesktopFolderUsageDescription: "Craft Agents requires access to your Desktop folder to read and process your files."
+    NSDownloadsFolderUsageDescription: "Craft Agents requires access to your Downloads folder to read and process your files."
   target:
     - target: dmg
       arch:
