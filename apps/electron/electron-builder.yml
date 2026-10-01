@@ -92,6 +92,9 @@ mac:
     # Crafty (spike) asks a browser for the address of the page you called it from. Under the
     # hardened runtime this also needs the apple-events entitlement (build/entitlements.mac.plist).
     NSAppleEventsUsageDescription: "Crafty reads the address of the page you're on when you call it from a browser."
+    NSDocumentsFolderUsageDescription: "Craft Agents requires access to your Documents folder to read and process your files."
+    NSDesktopFolderUsageDescription: "Craft Agents requires access to your Desktop folder to read and process your files."
+    NSDownloadsFolderUsageDescription: "Craft Agents requires access to your Downloads folder to read and process your files."
   # Apple Silicon only: release.yml dropped Intel builds. build-dmg.sh passes `--${ARCH}`, which
   # overrides this list, so `dist:mac:x64` still builds an Intel app by hand.
   target:
