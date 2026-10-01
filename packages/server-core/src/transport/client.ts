@@ -278,6 +278,11 @@ export class WsRpcClient implements RpcClient {
   reconnectNow(): void {
     if (this.destroyed) return
 
+    // Explicit reconnect (wake, unlock, network online, user click) starts
+    // the backoff over instead of waiting out the current delay.
+    this.reconnectAttempt = 0
+    this.manualReconnectRequested = false
+
     if (this.clientId) {
       this.pendingReconnect = {
         clientId: this.clientId,
