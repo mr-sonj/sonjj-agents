@@ -10,7 +10,8 @@ Each feature lives on its own branch, based on `main` (a clean copy of upstream)
 | `feature/custom-tweaks` | New sessions remember the last working directory |
 | `feature/agents-md-discovery` | `AGENTS.md` from working directories outside the workspace |
 | `fix/gemini-vertex-tool-schemas` | Tool schemas that Gemini and Vertex AI accept |
-| `feature/lan-remote-server` | Reliable connection to a self-hosted server on the LAN, local build fixes |
+| `feature/lan-remote-server` | Reliable connection to a self-hosted server on the LAN |
+| `fix/self-build` | Building and packaging the app yourself, outside the upstream release pipeline |
 | `feature/fork-branding` | No automatic update to the official Craft Agents release |
 | `fork/meta` | This file and other fork-only files |
 
@@ -70,18 +71,39 @@ For running the headless server on one machine and the desktop app on another:
   cloud-off icon opens the reconnect screen.
 - `bun run server:start` reads `.env.server.local` (copy `.env.server.example`).
 
-It also fixes local builds: sub-builds use the running `bun` binary, `pi-agent-server` and the MCP
-servers are bundled into the app and the server build, `build-dmg.sh` packages from a staging folder to
-avoid running out of memory, and macOS asks for Documents/Desktop/Downloads access properly.
-
 Main files: `packages/server-core/src/transport/client.ts`, `apps/electron/src/preload/bootstrap.ts`,
-`apps/electron/src/main/index.ts`, `apps/electron/scripts/build-dmg.sh`, `scripts/`.
+`apps/electron/src/main/index.ts`, `apps/electron/src/renderer/components/app-shell/WorkspaceSwitcher.tsx`.
+
+## Building it yourself
+
+Branch: `fix/self-build`
+
+Fixes for building and packaging the app and the server on your own machine instead of the upstream
+release pipeline:
+
+- Sub-builds run the same `bun` binary as the parent build, so they work when `bun` is not on `PATH`.
+- `pi-agent-server` (with `koffi` for the target architecture) is bundled into the app and the server
+  build.
+- `build-dmg.sh` makes read-only files from the Bun cache writable before cleaning up. Set
+  `CRAFT_DMG_STAGING=1` to package from a staging copy outside the workspace if electron-builder runs out
+  of memory scanning the workspace `node_modules`; it is off by default.
+- `build-win.ps1` is ASCII-only, so Windows PowerShell 5.1 can parse it.
+- The renderer build dedupes the Radix menu packages, so dropdown menus from the shared UI package work
+  in a Bun workspace build.
+- macOS shows a proper prompt for Documents, Desktop and Downloads access.
+
+Main files: `scripts/`, `apps/electron/scripts/build-dmg.sh`, `apps/electron/scripts/build-win.ps1`,
+`apps/electron/vite.config.ts`, `apps/electron/electron-builder.yml`.
 
 ## No automatic update to the official release
 
 Branch: `feature/fork-branding`
 
 The app no longer checks the Craft update server on launch, so a modded build does not download the
-official release and lose its changes. Manual "Check for updates" still works.
+official release and lose its changes.
+
+A manual "Check for updates" still asks the Craft update server, and installing what it offers replaces
+the modded build with the official release. Do not install updates from inside the app for now; this
+branch will later rename the app and stop pointing updates at Craft.
 
 Main files: `apps/electron/src/main/auto-update.ts`, `apps/electron/src/main/index.ts`.
