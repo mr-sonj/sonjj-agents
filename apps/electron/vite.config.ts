@@ -57,7 +57,18 @@ export default defineConfig({
       'react': resolve(__dirname, '../../node_modules/react'),
       'react-dom': resolve(__dirname, '../../node_modules/react-dom'),
     },
-    dedupe: ['react', 'react-dom']
+    // @craft-agent/ui is a workspace symlink and Bun gives it package-local
+    // dependency symlinks. Without deduping the Radix menu packages, Rollup can
+    // bundle one instance for app components and another for shared UI
+    // components. Their React contexts are then incompatible (for example,
+    // DropdownMenu.Root cannot provide context to StyledDropdownMenuContent).
+    dedupe: [
+      'react',
+      'react-dom',
+      '@radix-ui/react-context-menu',
+      '@radix-ui/react-dropdown-menu',
+      '@radix-ui/react-menu',
+    ]
   },
   optimizeDeps: {
     include: ['react', 'react-dom', 'jotai', 'pdfjs-dist'],
