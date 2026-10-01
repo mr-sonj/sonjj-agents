@@ -1,0 +1,34 @@
+diff --git a/dist/api/google-shared.js b/dist/api/google-shared.js
+index 478c2c387b3a9c781c04a2268677c62a26093d42..e8b58f592b09b0b85d25b31fe74a9d56cfef8b53 100644
+--- a/dist/api/google-shared.js
++++ b/dist/api/google-shared.js
+@@ -318,6 +318,14 @@ function sanitizeForOpenApi(schema) {
+     for (const [key, value] of Object.entries(schema)) {
+         if (JSON_SCHEMA_META_DECLARATIONS.has(key))
+             continue;
++        // OpenAPI Schema has no `const`; its single-value `enum` equivalent
++        // preserves the constraint and is accepted by Gemini/Vertex.
++        if (key === "const") {
++            result.enum = [sanitizeForOpenApi(value)];
++            continue;
++        }
++        if (key === "enum" && Object.hasOwn(schema, "const"))
++            continue;
+         result[key] = sanitizeForOpenApi(value);
+     }
+     return result;
+diff --git a/dist/api/google-vertex.js b/dist/api/google-vertex.js
+index 85ca3a5d0bd811ae36242381428bf48765271076..7cdc0dce4c0b10aa7791a6d1257c09cea722b5ba 100644
+--- a/dist/api/google-vertex.js
++++ b/dist/api/google-vertex.js
+@@ -371,7 +371,9 @@ function buildParams(model, context, options = {}) {
+         ...(Object.keys(generationConfig).length > 0 && generationConfig),
+         ...(systemInstruction && { systemInstruction: sanitizeSurrogates(systemInstruction) }),
+         ...(currentTools.length > 0 && {
+-            tools: convertTools(currentTools, false, supportsStrictMode),
++            // Vertex's tool translation still expects the legacy OpenAPI schema
++            // field. Google AI Studio uses parametersJsonSchema instead.
++            tools: convertTools(currentTools, true, supportsStrictMode),
+         }),
+         ...(functionCallingMode !== undefined && {
+             toolConfig: { functionCallingConfig: { mode: functionCallingMode } },
