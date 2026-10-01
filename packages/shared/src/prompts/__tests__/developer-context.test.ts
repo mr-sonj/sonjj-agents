@@ -54,14 +54,13 @@ describe('git developer context', () => {
     expect(block!).toContain('packages/shared/changed.txt');
   });
 
-  it('lists root and selected-path context files relative to git context_root', () => {
+  it('lists the git root and selected-path context files', () => {
     const { root, packageDir } = createGitFixture();
 
     const block = getProjectContextFilesPrompt(packageDir);
 
-    expect(block).toContain(`context_root="${root}"`);
-    expect(block).toContain('- CLAUDE.md (root)');
-    expect(block).toContain('- packages/shared/CLAUDE.md');
+    expect(block).toContain(`- ${join(root, 'CLAUDE.md')} (repository root)`);
+    expect(block).toContain(`- ${join(packageDir, 'CLAUDE.md')} (working directory)`);
   });
 });
 
