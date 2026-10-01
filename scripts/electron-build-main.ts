@@ -140,7 +140,7 @@ async function buildInterceptor(): Promise<void> {
 
   const proc = spawn({
     cmd: [
-      "bun", "run", "esbuild",
+      process.execPath, "run", "esbuild",
       INTERCEPTOR_SOURCE,
       "--bundle",
       "--platform=node",
@@ -188,7 +188,7 @@ async function buildPiAgentServer(): Promise<void> {
   // calls that fail at runtime since there are no node_modules relative to dist/.
   const proc = spawn({
     cmd: [
-      "bun", "build",
+      process.execPath, "build",
       join(PI_AGENT_SERVER_DIR, "src/index.ts"),
       "--outfile", PI_AGENT_SERVER_OUTPUT,
       "--target", "bun",
@@ -235,7 +235,7 @@ async function buildWhatsAppWorker(): Promise<void> {
   // at bundle time because the specifier is a literal.
   const proc = spawn({
     cmd: [
-      "bun", "run", "esbuild",
+      process.execPath, "run", "esbuild",
       WA_WORKER_SOURCE,
       "--bundle",
       "--platform=node",
@@ -295,7 +295,7 @@ async function main(): Promise<void> {
 
   const proc = spawn({
     cmd: [
-      "bun", "run", "esbuild",
+      process.execPath, "run", "esbuild",
       "apps/electron/src/main/index.ts",
       "--bundle",
       "--platform=node",
