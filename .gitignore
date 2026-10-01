@@ -58,6 +58,7 @@ pnpm-lock.yaml
 
 # Craft Agent local data (sessions, credentials, config)
 .craft-agent/
+.craft-agent-server/
 
 # SSH keys and secrets
 *.pem
@@ -69,6 +70,8 @@ id_ed25519*
 # Credentials files
 credentials.enc
 *.credentials
+.env.server
+.env.server.local
 
 # act (local GitHub Actions runner)
 .secrets
