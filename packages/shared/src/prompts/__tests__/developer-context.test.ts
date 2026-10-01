@@ -55,19 +55,18 @@ describe('git developer context', () => {
     expect(block!).toContain('packages/shared/changed.txt');
   });
 
-  it('lists root and selected-path context files relative to git context_root', () => {
+  it('lists the git root and selected-path context files', () => {
     const { root, packageDir } = createGitFixture();
 
     const block = getProjectContextFilesPrompt(packageDir);
 
-    expect(block).toContain(`context_root="${root}"`);
-    expect(block).toContain('- CLAUDE.md (root)');
-    expect(block).toContain('- packages/shared/CLAUDE.md');
+    expect(block).toContain(`- ${join(root, 'CLAUDE.md')} (repository root)`);
+    expect(block).toContain(`- ${join(packageDir, 'CLAUDE.md')} (working directory)`);
   });
 
   // OSS #1140: the whole git root was globbed and capped to the 30 shallowest
   // files before filtering, so a big unrelated tree hid the selected path's files.
-  it('keeps ancestor and subtree context files when unrelated trees fill the cap', () => {
+  it('lists the root, parent and working folder, never unrelated trees or the subtree', () => {
     const { root, packageDir } = createGitFixture();
     for (let i = 0; i < 40; i++) {
       const dir = join(root, 'other', `p${String(i).padStart(2, '0')}`);
@@ -80,8 +79,13 @@ describe('git developer context', () => {
 
     const block = getProjectContextFilesPrompt(packageDir);
 
-    expect(block).toContain('- CLAUDE.md (root)\n- packages/AGENTS.md\n- packages/shared/CLAUDE.md\n- packages/shared/src/deep/claude.md');
-    expect(block).not.toContain('other/');
+    expect(block).toContain([
+      `- ${join(root, 'CLAUDE.md')} (repository root)`,
+      `- ${join(root, 'packages', 'AGENTS.md')} (parent context)`,
+      `- ${join(packageDir, 'CLAUDE.md')} (working directory)`,
+    ].join('\n'));
+    expect(block).not.toContain(join(root, 'other'));
+    expect(block).not.toContain('deep');
   });
 
   it('lists nothing when only folders beside the working folder have context files', () => {
@@ -94,7 +98,7 @@ describe('git developer context', () => {
     expect(getProjectContextFilesPrompt(packageDir)).toBe('');
   });
 
-  it('reads the git root and each folder above the working folder once, and nothing beside it', () => {
+  it('reads the git root and each folder above the working folder once, and nothing beside or below it', () => {
     const { root, packageDir } = createGitFixture();
     mkdirSync(join(root, 'other', 'deep'), { recursive: true });
     mkdirSync(join(root, 'packages', 'neighbour', 'src'), { recursive: true });
@@ -107,7 +111,7 @@ describe('git developer context', () => {
       const read = readdir.mock.calls.map(([dir]) => String(dir));
       const outside = read.filter((dir) => dir !== packageDir && !dir.startsWith(packageDir + sep));
       expect(outside).toEqual([root, join(root, 'packages')]);
-      expect(read).toContain(join(packageDir, 'src'));
+      expect(read).not.toContain(join(packageDir, 'src'));
     } finally {
       readdir.mockRestore();
     }

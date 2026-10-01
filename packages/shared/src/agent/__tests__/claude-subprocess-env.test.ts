@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { buildClaudeSubprocessEnv, CLAUDE_AUTH_ENV_KEYS } from '../options.ts';
+import { buildClaudeSubprocessEnv, CLAUDE_AUTH_ENV_KEYS, engineLoadsClaudeMd } from '../options.ts';
 
 const original = {
   CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS,
@@ -16,6 +16,7 @@ const original = {
   CLAUDE_CODE_USE_POWERSHELL_TOOL: process.env.CLAUDE_CODE_USE_POWERSHELL_TOOL,
   ENABLE_TOOL_SEARCH: process.env.ENABLE_TOOL_SEARCH,
   CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: process.env.CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK,
+  CLAUDE_CODE_DISABLE_CLAUDE_MDS: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS,
 };
 
 afterEach(() => {
@@ -139,5 +140,26 @@ describe('buildClaudeSubprocessEnv', () => {
     const switches = [...names].filter((name) => !CLI_FEATURE_FLAGS.includes(name));
     expect(switches).toContain('CLAUDE_CODE_USE_BEDROCK');
     expect(switches.filter((name) => !(CLAUDE_AUTH_ENV_KEYS as readonly string[]).includes(name))).toEqual([]);
+  });
+
+  // The system prompt leaves out the CLAUDE.md files the engine loads itself
+  // (prompts/system.ts), so the engine must keep loading them.
+  it('leaves the engine loading CLAUDE.md files', () => {
+    delete process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS;
+    expect(buildClaudeSubprocessEnv().CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBeUndefined();
+  });
+});
+
+describe('engineLoadsClaudeMd', () => {
+  it('is true while CLAUDE_CODE_DISABLE_CLAUDE_MDS is unset or falsy', () => {
+    expect(engineLoadsClaudeMd({})).toBe(true);
+    expect(engineLoadsClaudeMd({ CLAUDE_CODE_DISABLE_CLAUDE_MDS: '0' })).toBe(true);
+    expect(engineLoadsClaudeMd({ CLAUDE_CODE_DISABLE_CLAUDE_MDS: 'false' })).toBe(true);
+  });
+
+  it('is false for every value the engine reads as true', () => {
+    for (const value of ['1', 'true', 'YES', ' on ']) {
+      expect(engineLoadsClaudeMd({ CLAUDE_CODE_DISABLE_CLAUDE_MDS: value })).toBe(false);
+    }
   });
 });
