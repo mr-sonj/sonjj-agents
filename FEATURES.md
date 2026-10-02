@@ -13,7 +13,7 @@ Each feature lives on its own branch, based on `main` (a clean copy of upstream)
 | `feature/lan-remote-server` | Reliable connection to a self-hosted server on the LAN |
 | `fix/self-build` | Building and packaging the app yourself, outside the upstream release pipeline |
 | `feature/fork-branding` | Release builds named Sonjj Agents, no updates from Craft |
-| `fork/meta` | This file and other fork-only files |
+| `fork/meta` | Fork-only files: README, this file, changelog, release and secret-scan workflows, sync script |
 
 ## Custom skills and sources folders
 
@@ -87,7 +87,11 @@ release pipeline:
 - `build-dmg.sh` makes read-only files from the Bun cache writable before cleaning up. Set
   `CRAFT_DMG_STAGING=1` to package from a staging copy outside the workspace if electron-builder runs out
   of memory scanning the workspace `node_modules`; it is off by default.
-- `build-win.ps1` is ASCII-only, so Windows PowerShell 5.1 can parse it.
+- `build-win.ps1` is ASCII-only, so Windows PowerShell 5.1 can parse it, and builds the app with
+  `electron:build` like the macOS and Linux scripts, so the installer includes the Pi agent server and
+  the WhatsApp worker.
+- Packaged apps include `uv`, which the document tools (PDF, Office, markitdown) run on; it used to be
+  downloaded only by the dev build.
 - The renderer build dedupes the Radix menu packages, so dropdown menus from the shared UI package work
   in a Bun workspace build.
 - macOS shows a proper prompt for Documents, Desktop and Downloads access.
@@ -110,3 +114,17 @@ Data stays in `~/.craft-agent`, shared with the official app.
 
 Main files: `branding/`, `scripts/apply-branding.ts`, `apps/electron/src/main/auto-update.ts`,
 `apps/electron/src/main/index.ts`.
+
+## Fork files and releases
+
+Branch: `fork/meta`
+
+Files that exist only in this fork and touch nothing from upstream:
+
+- `.github/README.md`, the repository's front page (GitHub shows it instead of upstream's `README.md`).
+- `CHANGELOG.md`, one section per release.
+- `.github/workflows/release.yml`: a tag `v<upstream version>-mod.<n>` on `mod` builds the macOS,
+  Windows, Linux and server packages with the branding applied and publishes them with
+  `SHA256SUMS.txt`. Run it by hand for a dry run that keeps the files as workflow artifacts.
+- `.github/workflows/gitleaks.yml` scans this fork's commits for secrets on every push and pull request.
+- `scripts/fork/sync.sh` updates `main` from upstream, rebases each feature branch and rebuilds `mod`.
