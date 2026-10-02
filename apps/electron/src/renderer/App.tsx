@@ -1778,8 +1778,13 @@ export default function App() {
   // - Default: switch workspace in same window (in-window switching)
   // - With openInNewWindow=true: open in new window (or focus existing)
   const handleSelectWorkspace = useCallback(async (workspaceId: string, openInNewWindow = false) => {
-    // If selecting current workspace, do nothing
-    if (workspaceId === windowWorkspaceId) return
+    // If selecting current workspace, trigger reconnect if currently disconnected
+    if (workspaceId === windowWorkspaceId) {
+      if (connectionState?.status !== 'connected' && connectionState?.mode === 'remote') {
+        void window.electronAPI.reconnectTransport().catch(() => {})
+      }
+      return
+    }
 
     if (openInNewWindow) {
       // Open (or focus) the window for the selected workspace

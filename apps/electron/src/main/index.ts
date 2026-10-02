@@ -3,7 +3,7 @@
 import { loadShellEnv } from './shell-env'
 loadShellEnv()
 
-import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeImage, nativeTheme, powerMonitor, shell } from 'electron'
 import { createHash, randomUUID } from 'crypto'
 import { hostname, homedir } from 'os'
 import * as Sentry from '@sentry/electron/main'
@@ -524,6 +524,19 @@ app.whenReady().then(async () => {
         mainLog.info(message, context)
       }
     })
+
+    // Listen to system sleep/wake and network status changes to trigger transport reconnection
+    const notifySystemResume = (reason: string) => {
+      mainLog.info(`[main] System ${reason} — notifying renderer windows to reconnect transport`)
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) {
+          win.webContents.send('__transport:system-resume')
+        }
+      }
+    }
+
+    powerMonitor.on('resume', () => notifySystemResume('resumed from sleep'))
+    powerMonitor.on('unlock-screen', () => notifySystemResume('screen unlocked'))
 
     // Dialog bridge — preload capability handlers use ipcRenderer.invoke to
     // call main-process-only dialog APIs (dialog, BrowserWindow).
