@@ -13,7 +13,7 @@ Each feature lives on its own branch, based on `main` (a clean copy of upstream)
 | `feature/lan-remote-server` | Reliable connection to a self-hosted server on the LAN |
 | `fix/self-build` | Building and packaging the app yourself, outside the upstream release pipeline |
 | `feature/fork-branding` | Release builds named Sonjj Agents, no updates from Craft |
-| `fork/meta` | Fork-only files: README, this file, changelog, release and secret-scan workflows, sync script |
+| `fork/meta` | Fork-only files: README, this file, changelog, release, validation and secret-scan workflows, sync script |
 
 ## Custom skills and sources folders
 
@@ -126,6 +126,11 @@ Files that exist only in this fork and touch nothing from upstream:
 - `CHANGELOG.md`, one section per release.
 - `.github/workflows/release.yml`: a tag `v<upstream version>-mod.<n>` on `mod` builds the macOS,
   Windows, Linux and server packages with the branding applied and publishes them with
-  `SHA256SUMS.txt`. Run it by hand for a dry run that keeps the files as workflow artifacts.
+  `SHA256SUMS.txt`, only if that commit passes `fork-validate.yml`. Run it by hand for a dry run that
+  keeps the files as workflow artifacts.
+- `.github/workflows/fork-validate.yml` runs upstream's validation suite and every test file the fork's
+  commits add or change, on pushes to `mod`, pull requests, and before a release is published.
 - `.github/workflows/gitleaks.yml` scans this fork's commits for secrets on every push and pull request.
-- `scripts/fork/sync.sh` updates `main` from upstream, rebases each feature branch and rebuilds `mod`.
+- `scripts/fork/sync.sh` updates `main` from upstream, rebases each feature branch and rebuilds `mod`;
+  when nothing changed it keeps the existing `mod` commit, so `--push` has nothing to force-push.
+  Tested by `scripts/fork/__tests__/sync.test.ts`.
