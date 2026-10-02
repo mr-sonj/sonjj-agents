@@ -1,0 +1,34 @@
+# Scans this fork's own commits for secrets (tokens, keys, passwords) on every push and PR.
+# Commits that came from upstream (reachable from main) are left out: main mirrors
+# lukilabs/craft-agents-oss, and its history is upstream's to look after.
+
+name: Gitleaks
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  GITLEAKS_VERSION: "8.30.1"
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: |
+          curl -fsSL "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP" gitleaks
+
+      - name: Scan commits not in main
+        run: |
+          "$RUNNER_TEMP/gitleaks" git --no-banner --redact --verbose --log-opts="origin/main..HEAD" .
