@@ -126,8 +126,20 @@ merge_into_mod() {
     GIT_EDITOR=true git merge --continue
 }
 
+# same_build <commit> <ref...>: <commit> has the tree of HEAD, contains every ref, and has no commit of
+# its own besides merges. The mod just rebuilt then differs from it only in the merge commits' dates.
+same_build() {
+    local old="$1" ref
+    shift
+    [ "$(git rev-parse "$old^{tree}")" = "$(git rev-parse "HEAD^{tree}")" ] || return 1
+    for ref in "$@"; do
+        git merge-base --is-ancestor "$ref" "$old" || return 1
+    done
+    [ -z "$(git rev-list --no-merges "$old" --not "$@")" ]
+}
+
 main() {
-    local push=false branch
+    local push=false branch old_mod
     case "${1:-}" in
         "") ;;
         --push) push=true ;;
@@ -174,11 +186,17 @@ main() {
     learn_resolutions_from origin/mod
 
     echo "→ Rebuilding mod = main + ${#FEATURES[@]} branches"
+    old_mod="$(git rev-parse -q --verify refs/heads/mod || git rev-parse -q --verify refs/remotes/origin/mod || true)"
     git checkout -q -B mod main
     for branch in "${FEATURES[@]}"; do
         echo "  merge $branch"
         merge_into_mod "$branch"
     done
+    # Nothing changed: keep the previous mod, so its SHA stays and --push has nothing to force-push.
+    if [ -n "$old_mod" ] && same_build "$old_mod" main "${FEATURES[@]}"; then
+        git reset -q --hard "$old_mod"
+        echo "  = same content as before, keeping mod at ${old_mod:0:8}"
+    fi
 
     if [ "$push" = true ]; then
         echo "→ Pushing to origin"
