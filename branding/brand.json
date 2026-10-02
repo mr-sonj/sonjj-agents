@@ -1,0 +1,11 @@
+{
+  "name": "Sonjj Agents",
+  "agentName": "Sonjj Agent",
+  "appId": "com.sonjj.agents",
+  "artifactPrefix": "Sonjj-Agents",
+  "author": "Sonjj",
+  "homepage": "https://github.com/mr-sonj/sonjj-agents",
+  "description": "Desktop app for Sonjj Agents, a fork of Craft Agents",
+  "copyright": "Copyright © 2026 Sonjj. Based on Craft Agents by Craft Docs Ltd.",
+  "coAuthor": "Sonjj Agent <agents-noreply@sonjj.com>"
+}
