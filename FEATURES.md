@@ -1,6 +1,6 @@
 # Features
 
-Changes this fork adds on top of [Craft Agents](https://github.com/lukilabs/craft-agents-oss).
+Changes this fork (Sonjj Agents) adds on top of [Craft Agents](https://github.com/lukilabs/craft-agents-oss).
 Each feature lives on its own branch, based on `main` (a clean copy of upstream). The default branch
 `mod` merges all of them. To take just one feature, merge its branch into your own checkout of upstream.
 
@@ -12,7 +12,7 @@ Each feature lives on its own branch, based on `main` (a clean copy of upstream)
 | `fix/gemini-vertex-tool-schemas` | Tool schemas that Gemini and Vertex AI accept |
 | `feature/lan-remote-server` | Reliable connection to a self-hosted server on the LAN |
 | `fix/self-build` | Building and packaging the app yourself, outside the upstream release pipeline |
-| `feature/fork-branding` | No automatic update to the official Craft Agents release |
+| `feature/fork-branding` | Release builds named Sonjj Agents, no updates from Craft |
 | `fork/meta` | This file and other fork-only files |
 
 ## Custom skills and sources folders
@@ -95,15 +95,18 @@ release pipeline:
 Main files: `scripts/`, `apps/electron/scripts/build-dmg.sh`, `apps/electron/scripts/build-win.ps1`,
 `apps/electron/vite.config.ts`, `apps/electron/electron-builder.yml`.
 
-## No automatic update to the official release
+## Sonjj Agents branding, no updates from Craft
 
 Branch: `feature/fork-branding`
 
-The app no longer checks the Craft update server on launch, so a modded build does not download the
-official release and lose its changes.
+Craft's trademark policy asks forks to ship under their own name, so release builds are named
+**Sonjj Agents**, with their own icon and bundle id (`com.sonjj.agents`). The source keeps upstream's
+names so it stays easy to sync; `scripts/apply-branding.ts` applies `branding/` to a checkout right
+before building. See `branding/README.md`.
 
-A manual "Check for updates" still asks the Craft update server, and installing what it offers replaces
-the modded build with the official release. Do not install updates from inside the app for now; this
-branch will later rename the app and stop pointing updates at Craft.
+The app never contacts the Craft update server, so a modded build cannot be replaced by the official
+release: it does not check on launch, and "Check for updates" opens this fork's GitHub releases page.
+Data stays in `~/.craft-agent`, shared with the official app.
 
-Main files: `apps/electron/src/main/auto-update.ts`, `apps/electron/src/main/index.ts`.
+Main files: `branding/`, `scripts/apply-branding.ts`, `apps/electron/src/main/auto-update.ts`,
+`apps/electron/src/main/index.ts`.
