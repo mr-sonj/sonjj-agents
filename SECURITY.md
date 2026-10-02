@@ -2,13 +2,14 @@
 
 ## Reporting a Vulnerability
 
-We take security seriously. If you discover a security vulnerability in Craft Agents, please report it responsibly.
+We take security seriously. If you discover a security vulnerability in Sonjj Agents (a fork of Craft Agents), please report it responsibly.
 
 ### How to Report
 
 **Please do NOT report security vulnerabilities through public GitHub issues.**
 
-Instead, please send an email to: **security@craft.do**
+Instead, report it privately through [GitHub Security Advisories](https://github.com/mr-sonj/sonjj-agents/security/advisories/new).
+If the issue also affects upstream Craft Agents, please report it to Craft Docs at **security@craft.do** as well.
 
 Include the following information:
 - Description of the vulnerability
@@ -18,16 +19,14 @@ Include the following information:
 
 ### What to Expect
 
-- **Acknowledgment**: We will acknowledge receipt within 48 hours
-- **Initial Assessment**: We will provide an initial assessment within 7 days
-- **Resolution Timeline**: We aim to resolve critical issues within 30 days
+This fork is maintained by one person on a best-effort basis. Reports are acknowledged and assessed
+as soon as possible; fixes that belong upstream follow Craft Agents' own timeline.
 
 ### Scope
 
 This policy applies to:
-- The Craft Agents desktop application
-- The `@craft-agent/*` npm packages
-- Official Craft Agents repositories
+- The Sonjj Agents desktop application and server builds
+- The [mr-sonj/sonjj-agents](https://github.com/mr-sonj/sonjj-agents) repository
 
 ### Out of Scope
 
@@ -46,7 +45,7 @@ We only provide security updates for the latest version. Please keep your instal
 
 ## Security Best Practices
 
-When using Craft Agents:
+When using Sonjj Agents:
 
 1. **Keep credentials secure**: Never commit `.env` files or credentials
 2. **Use environment variables**: Store secrets in environment variables
