@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'bun:test'
 import { existsSync, readFileSync } from 'fs'
 import { join } from 'path'
+import { Glob } from 'bun'
 import { loadBrand, planBranding, renameText } from '../apply-branding'
 
 const root = join(import.meta.dir, '../..')
@@ -81,5 +82,11 @@ describe('apply-branding', () => {
     })
     const textWrites = [...second.writes].filter(([, content]) => typeof content === 'string').map(([rel]) => rel)
     expect(textWrites).toEqual([])
+  })
+
+  it('plans the same changes when the file scan returns Windows paths', () => {
+    const windows = planBranding(root, brand, undefined, pattern =>
+      [...new Glob(pattern).scanSync({ cwd: root })].map(rel => rel.replaceAll('/', '\\')))
+    expect(windows).toEqual(plan)
   })
 })
