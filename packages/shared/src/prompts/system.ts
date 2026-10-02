@@ -3,7 +3,7 @@ import { getBrowserToolEnabled, getRtkEnabled } from '../config/storage.ts';
 import { getRtkPath } from '../agent/core/rtk-detector.ts';
 import { loadWorkspaceConfig } from '../workspaces/storage.ts';
 import { debug } from '../utils/debug.ts';
-import { readFileSync, readdirSync, realpathSync } from 'fs';
+import { readFileSync, readdirSync, statSync } from 'fs';
 import { isAbsolute, join, relative, basename, resolve, dirname } from 'path';
 import { DOC_REFS, APP_ROOT } from '../docs/index.ts';
 import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
@@ -132,11 +132,12 @@ function getProjectContextSearchDirectories(
 
 /**
  * The context files of one directory, AGENTS.md first, from a single directory read.
- * When the engine loads this directory's CLAUDE.md itself, that file is left out, and so
- * is an AGENTS.md that is the same file. A CLAUDE.md that is the same file as the
- * AGENTS.md beside it is listed once.
+ * When the engine reads this directory and loads its CLAUDE.md itself, that file is left
+ * out, and so is an AGENTS.md that is the same file. The engine opens the exact name
+ * CLAUDE.md, so on a case-sensitive file system a claude.md is not loaded and stays
+ * listed. A CLAUDE.md that is the same file as the AGENTS.md beside it is listed once.
  */
-function findContextFilesInDirectory(directory: string, engineLoadsClaudeMd: boolean): string[] {
+function findContextFilesInDirectory(directory: string, engineReadsDirectory: boolean): string[] {
   let entries: string[];
   try {
     entries = readdirSync(directory);
@@ -146,19 +147,28 @@ function findContextFilesInDirectory(directory: string, engineLoadsClaudeMd: boo
 
   const agentsFile = entries.find((name) => name.toLowerCase() === 'agents.md');
   const claudeFile = entries.find((name) => name.toLowerCase() === 'claude.md');
+  const engineLoadsClaudeFile = engineReadsDirectory && claudeFile !== undefined &&
+    (claudeFile === 'CLAUDE.md' || isSameFile(join(directory, claudeFile), join(directory, 'CLAUDE.md')));
   if (agentsFile && claudeFile && isSameFile(join(directory, agentsFile), join(directory, claudeFile))) {
-    return engineLoadsClaudeMd ? [] : [agentsFile];
+    return engineLoadsClaudeFile ? [] : [agentsFile];
   }
 
   const files: string[] = [];
   if (agentsFile) files.push(agentsFile);
-  if (claudeFile && !engineLoadsClaudeMd) files.push(claudeFile);
+  if (claudeFile && !engineLoadsClaudeFile) files.push(claudeFile);
   return files;
 }
 
+/**
+ * Whether two paths open the same file: through links, and through a case alias on a
+ * case-insensitive file system. Compares device and inode, since Node's realpathSync
+ * keeps the casing it was given while Bun's returns the casing on disk.
+ */
 function isSameFile(a: string, b: string): boolean {
   try {
-    return realpathSync(a) === realpathSync(b);
+    const statA = statSync(a, { bigint: true });
+    const statB = statSync(b, { bigint: true });
+    return statA.dev === statB.dev && statA.ino === statB.ino;
   } catch {
     return false;
   }
@@ -272,8 +282,8 @@ export function getProjectContextFilesPrompt(
   const engineCwd = claudeEngineCwd ? resolve(claudeEngineCwd) : undefined;
   const fileLines: string[] = [];
   for (const { directory, label } of getProjectContextSearchDirectories(workingDirectory, contextRootPath)) {
-    const engineLoadsClaudeMd = engineCwd !== undefined && isSameOrChildPath(directory, engineCwd);
-    for (const filename of findContextFilesInDirectory(directory, engineLoadsClaudeMd)) {
+    const engineReadsDirectory = engineCwd !== undefined && isSameOrChildPath(directory, engineCwd);
+    for (const filename of findContextFilesInDirectory(directory, engineReadsDirectory)) {
       fileLines.push(`- ${sanitizePromptLine(join(directory, filename), PROJECT_CONTEXT_FILES_TAGS)} (${label})`);
     }
   }

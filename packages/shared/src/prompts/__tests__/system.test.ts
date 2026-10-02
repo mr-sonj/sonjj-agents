@@ -1,5 +1,5 @@
 import { describe, it, expect, mock, beforeEach, afterEach } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 
@@ -401,6 +401,22 @@ describe('getProjectContextFilesPrompt', () => {
       expect(listedContextFiles(getProjectContextFilesPrompt(app, undefined, app))).toEqual([
         `- ${join(packages, 'AGENTS.md')} (parent context)`,
         `- ${join(app, 'AGENTS.md')} (working directory)`,
+      ])
+    })
+
+    // The engine opens the exact name CLAUDE.md: on a case-sensitive file system
+    // (Linux) it never loads a claude.md, so that file has to stay listed.
+    it('leaves out a differently cased claude.md only where the engine opens it as CLAUDE.md', () => {
+      tempDir = mkdtempSync(join(tmpdir(), 'project-context-engine-case-'))
+      const { repo, packages, app } = createRepository(tempDir)
+      writeFileSync(join(app, 'claude.md'), '# app claude')
+      const engineOpensIt = existsSync(join(app, 'CLAUDE.md'))
+
+      expect(listedContextFiles(getProjectContextFilesPrompt(app, undefined, app))).toEqual([
+        `- ${join(repo, 'AGENTS.md')} (repository root)`,
+        `- ${join(packages, 'AGENTS.md')} (parent context)`,
+        `- ${join(app, 'AGENTS.md')} (working directory)`,
+        ...(engineOpensIt ? [] : [`- ${join(app, 'claude.md')} (working directory)`]),
       ])
     })
   })
