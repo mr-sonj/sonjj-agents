@@ -246,7 +246,10 @@ cd "$BUILDER_DIR"
 export CSC_IDENTITY_AUTO_DISCOVERY=true
 
 # Build electron-builder arguments
-BUILDER_ARGS="--mac --${ARCH}"
+# Name the targets: electron-builder ignores --${ARCH} for targets that list their
+# own arch in electron-builder.yml, and would also package the other arch with this
+# arch's bun/claude/koffi binaries (an app that cannot run).
+BUILDER_ARGS="--mac dmg zip --${ARCH}"
 
 # Add code signing if identity is available
 if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
