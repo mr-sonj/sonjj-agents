@@ -162,11 +162,30 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      # Windows paths once made branding skip files: a second run must find nothing left to change.
       - name: Apply branding
-        run: bun run scripts/apply-branding.ts
+        shell: bash
+        run: |
+          bun run scripts/apply-branding.ts
+          bun run scripts/apply-branding.ts --dry-run | tee "$RUNNER_TEMP/branding.txt"
+          grep -q ': 0 files updated, 0 removed\.$' "$RUNNER_TEMP/branding.txt" || { echo "::error::Branding not fully applied"; exit 1; }
 
       - name: Build installer (x64)
         run: powershell -NoProfile -ExecutionPolicy Bypass -File apps/electron/scripts/build-win.ps1
+
+      - name: Check the installer
+        shell: bash
+        run: |
+          ls apps/electron/release
+          [ -f apps/electron/release/Sonjj-Agents-x64.exe ] || { echo "::error::Sonjj-Agents-x64.exe missing"; exit 1; }
+          app=apps/electron/release/win-unpacked
+          [ -f "$app/Sonjj Agents.exe" ] || { echo "::error::Sonjj Agents.exe missing"; exit 1; }
+          if [ -e "$app/resources/app-update.yml" ]; then
+            echo "::error::app-update.yml present: the app would look for updates"
+            exit 1
+          fi
+          [ -f "$app/resources/app/resources/bin/win32-x64/uv.exe" ] || { echo "::error::uv missing"; exit 1; }
+          [ -f "$app/resources/app/resources/pi-agent-server/index.js" ] || { echo "::error::pi-agent-server missing"; exit 1; }
 
       - name: Upload
         uses: actions/upload-artifact@v4
