@@ -244,88 +244,19 @@ foreach ($dep in @("interceptor-common.ts", "feature-flags.ts", "interceptor-req
 }
 
 # 6. Build Electron app
+# Same entry point as build-dmg.sh and build-linux.sh: electron:build also bundles the
+# Pi agent server (with koffi for the target arch), the WhatsApp worker and uv, which a
+# hand-rolled main/preload/renderer build here would leave out of the installer.
 Write-Host "Building Electron app..."
-
-# Build main process with OAuth credentials
-Write-Host "  Building main process..."
-$MainArgs = @(
-    "apps/electron/src/main/index.ts",
-    "--bundle",
-    "--platform=node",
-    "--format=cjs",
-    "--outfile=apps/electron/dist/main.cjs",
-    "--external:electron",
-    # SDK 0.3.x is pure ESM and calls createRequire(import.meta.url) at module init.
-    # esbuild's CJS bundling leaves import.meta.url undefined for inlined ESM, crashing
-    # the app on load (ERR_INVALID_ARG_VALUE). Externalize it so Node loads it natively
-    # as ESM - the SDK core is staged into the app's node_modules above (step 4).
-    # Must stay in sync with package.json build:main and scripts/electron-dev.ts.
-    "--external:@anthropic-ai/claude-agent-sdk"
-)
-# Add OAuth defines if env vars are set
-if ($env:GOOGLE_OAUTH_CLIENT_ID) {
-    $MainArgs += "--define:process.env.GOOGLE_OAUTH_CLIENT_ID=`"'$env:GOOGLE_OAUTH_CLIENT_ID'`""
-}
-if ($env:GOOGLE_OAUTH_CLIENT_SECRET) {
-    $MainArgs += "--define:process.env.GOOGLE_OAUTH_CLIENT_SECRET=`"'$env:GOOGLE_OAUTH_CLIENT_SECRET'`""
-}
-if ($env:SLACK_OAUTH_CLIENT_ID) {
-    $MainArgs += "--define:process.env.SLACK_OAUTH_CLIENT_ID=`"'$env:SLACK_OAUTH_CLIENT_ID'`""
-}
-if ($env:SLACK_OAUTH_CLIENT_SECRET) {
-    $MainArgs += "--define:process.env.SLACK_OAUTH_CLIENT_SECRET=`"'$env:SLACK_OAUTH_CLIENT_SECRET'`""
-}
-if ($env:MICROSOFT_OAUTH_CLIENT_ID) {
-    $MainArgs += "--define:process.env.MICROSOFT_OAUTH_CLIENT_ID=`"'$env:MICROSOFT_OAUTH_CLIENT_ID'`""
-}
 Push-Location $RootDir
 try {
-    & npx esbuild @MainArgs
-    if ($LASTEXITCODE -ne 0) { throw "Main process build failed" }
-} finally {
-    Pop-Location
-}
+    $env:CRAFT_BUILD_ARCH = "x64"
+    bun run electron:build
+    if ($LASTEXITCODE -ne 0) { throw "Electron build failed" }
 
-# Build preload
-Write-Host "  Building preload..."
-Push-Location $RootDir
-try {
-    bun run electron:build:preload
-    if ($LASTEXITCODE -ne 0) { throw "Preload build failed" }
-} finally {
-    Pop-Location
-}
-
-# Build renderer (frontend)
-Write-Host "  Building renderer (frontend)..."
-Push-Location $RootDir
-try {
-    # Clean previous renderer build
-    $RendererDir = "$ElectronDir\dist\renderer"
-    if (Test-Path $RendererDir) { Remove-Item -Recurse -Force $RendererDir }
-
-    # Run vite build
-    npx vite build --config apps/electron/vite.config.ts
-    if ($LASTEXITCODE -ne 0) { throw "Renderer build failed" }
-
-    # Verify renderer was built
-    if (-not (Test-Path "$RendererDir\index.html")) {
+    if (-not (Test-Path "$ElectronDir\dist\renderer\index.html")) {
         throw "Renderer build verification failed: index.html not found"
     }
-    Write-Host "  Renderer build verified: $RendererDir" -ForegroundColor Green
-} finally {
-    Pop-Location
-}
-
-# Copy all resources and bundled assets using the shared script.
-# Single source of truth - matches Mac/Linux build (bun run build:copy).
-# Copies: resources (icons, DMG bg), docs, tool-icons, themes, permissions, config-defaults.
-Write-Host "  Copying resources and bundled assets..."
-Push-Location $ElectronDir
-try {
-    bun scripts/copy-assets.ts
-    if ($LASTEXITCODE -ne 0) { throw "Asset copy failed" }
-    Write-Host "  Assets copied" -ForegroundColor Green
 } finally {
     Pop-Location
 }
