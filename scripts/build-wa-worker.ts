@@ -80,7 +80,7 @@ async function main(): Promise<void> {
 
   const proc = spawn({
     cmd: [
-      "bun", "run", "esbuild",
+      process.execPath, "run", "esbuild",
       SOURCE,
       "--bundle",
       "--platform=node",
