@@ -14,10 +14,12 @@ directories:
 files:
   - dist/**/*
   - "!dist/renderer/src/**"
-  # The build also copies resources/ into dist/resources/; the Pi agent server ships
-  # from resources/ (below), so skip its dist copy. electron-builder packages what
-  # either this list or the platform `files` list includes: exclude it in both.
+  # The build also copies resources/ into dist/resources/; the Pi agent server and
+  # the uv binaries (resources/bin/<platform>-<arch>) ship from resources/ (below),
+  # so skip their dist copies. electron-builder packages what either this list or
+  # the platform `files` list includes: exclude them in both.
   - "!dist/resources/pi-agent-server/**"
+  - "!dist/resources/bin/*-*/**"
   - "!**/*.map"
   - package.json
   # Include Pi agent server subprocess for Pi SDK sessions
@@ -129,8 +131,9 @@ mac:
   files:
     - "!**/resources/bin/win32-*/**"
     - "!**/resources/bin/linux-*/**"
-    # Skip the dist/resources copy of the Pi agent server (see top-level files)
+    # Skip the dist/resources copies of the Pi agent server and uv (see top-level files)
     - "!dist/resources/pi-agent-server/**"
+    - "!dist/resources/bin/*-*/**"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)
   artifactName: "Craft-Agents-${arch}.${ext}"
   # Code signing & notarization (disabled by default for local builds)
@@ -177,8 +180,9 @@ win:
     # See: https://github.com/electron-userland/electron-builder/issues/8250
     - "!vendor/bun/**/*"
     - "!**/resources/bin/win32-x64/**"
-    # Skip the dist/resources copy of the Pi agent server (see top-level files)
+    # Skip the dist/resources copies of the Pi agent server and uv (see top-level files)
     - "!dist/resources/pi-agent-server/**"
+    - "!dist/resources/bin/*-*/**"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
     - from: node_modules/@anthropic-ai/claude-agent-sdk
@@ -225,5 +229,6 @@ linux:
   files:
     - "!**/resources/bin/darwin-*/**"
     - "!**/resources/bin/win32-*/**"
-    # Skip the dist/resources copy of the Pi agent server (see top-level files)
+    # Skip the dist/resources copies of the Pi agent server and uv (see top-level files)
     - "!dist/resources/pi-agent-server/**"
+    - "!dist/resources/bin/*-*/**"
