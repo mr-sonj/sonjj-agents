@@ -20,7 +20,7 @@ Sonjj Agents is an independent project. It is not affiliated with or endorsed by
 - **Its own name, icon and bundle id**, and no updates from Craft's servers.
 
 Each feature lives on its own branch; [FEATURES.md](../FEATURES.md) describes them and
-[CHANGELOG.md](../CHANGELOG.md) lists the releases.
+[CHANGELOG.md](../CHANGELOG.md) has notes on the releases.
 
 ## Download
 

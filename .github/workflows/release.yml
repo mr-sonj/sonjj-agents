@@ -1,7 +1,8 @@
 # Builds Sonjj Agents for every platform and publishes a GitHub release.
 #
 # Release: push a tag v<upstream version>-mod.<n> (for example v0.14.0-mod.1) on a commit of
-# `mod`, with a matching "## <version>" section in CHANGELOG.md.
+# `mod`. The release notes are the matching "## <version>" section of CHANGELOG.md, or a short
+# generated note when there is none.
 # Dry run: start the workflow by hand on any branch. Everything is built and checked, and the
 # files are kept as workflow artifacts for a few days instead of being published.
 #
@@ -61,7 +62,7 @@ jobs:
           echo "version=$version" >> "$GITHUB_OUTPUT"
           echo "Version: $version"
 
-      - name: Release notes from CHANGELOG.md
+      - name: Release notes
         if: github.ref_type == 'tag'
         env:
           VERSION: ${{ steps.version.outputs.version }}
@@ -71,8 +72,14 @@ jobs:
             found { print }
           ' CHANGELOG.md > release-notes.md
           if ! grep -q '[^[:space:]]' release-notes.md; then
-            echo "::error::CHANGELOG.md has no \"## $VERSION\" section"
-            exit 1
+            upstream="${VERSION%-mod.*}"
+            repo="https://github.com/$GITHUB_REPOSITORY"
+            {
+              echo "Built on [Craft Agents $upstream](https://github.com/lukilabs/craft-agents-oss/releases/tag/v$upstream),"
+              echo "with this fork's features ([FEATURES.md]($repo/blob/$GITHUB_REF_NAME/FEATURES.md))."
+              echo ""
+              echo "Builds are not signed; the [README]($repo#readme) explains how to open them."
+            } > release-notes.md
           fi
           cat release-notes.md
 
