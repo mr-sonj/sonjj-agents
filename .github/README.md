@@ -59,12 +59,22 @@ with both installed, sign-in links may open the other app.
 mkdir sonjj-agents-server
 tar -xzf Sonjj-Agents-server-linux-x64.tar.gz -C sonjj-agents-server
 cd sonjj-agents-server
-CRAFT_SERVER_TOKEN=$(openssl rand -hex 32) CRAFT_RPC_HOST=0.0.0.0 ./start.sh
+CRAFT_SERVER_TOKEN=$(openssl rand -hex 32) ./start.sh    # this machine only (127.0.0.1)
 ```
 
-`./install.sh --systemd` sets it up as a service on Linux. The settings (`CRAFT_*` variables, TLS)
-are the same as upstream's; see [Remote Server](../README.md#remote-server-headless) in the upstream
-README. On a trusted LAN this fork's app can also connect over plain `ws://`.
+To reach it from other machines, either set up TLS (`CRAFT_RPC_TLS_CERT`, `CRAFT_RPC_TLS_KEY`) or, on
+a LAN you trust, accept plain `ws://` explicitly. Without one of the two the server refuses to listen
+on a network address, because the token would cross the network in cleartext:
+
+```bash
+CRAFT_SERVER_TOKEN=$(openssl rand -hex 32) CRAFT_RPC_HOST=0.0.0.0 ./start.sh --allow-insecure-bind
+```
+
+On Linux, `sudo ./install.sh --systemd` sets it up as a service. The service listens on 127.0.0.1
+only; to serve the LAN, edit `/etc/systemd/system/craft-server.service` the same way (host, TLS or
+`--allow-insecure-bind` on `ExecStart`). The other settings (`CRAFT_*` variables) are the same as
+upstream's; see [Remote Server](../README.md#remote-server-headless) in the upstream README. Unlike
+the official app, this fork's app can connect to a plain `ws://` server.
 
 ## Build from source
 
