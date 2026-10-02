@@ -1,9 +1,10 @@
 import { formatPreferencesForPrompt, getCoAuthorPreference } from '../config/preferences.ts';
 import { getBrowserToolEnabled, getRtkEnabled } from '../config/storage.ts';
 import { getRtkPath } from '../agent/core/rtk-detector.ts';
+import { loadWorkspaceConfig, getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
 import { debug } from '../utils/debug.ts';
-import { existsSync, readFileSync, readdirSync } from 'fs';
-import { dirname, join, relative, basename, resolve } from 'path';
+import { readFileSync, readdirSync, statSync } from 'fs';
+import { isAbsolute, join, relative, basename, resolve, dirname } from 'path';
 import { DOC_REFS, APP_ROOT } from '../docs/index.ts';
 import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
@@ -11,8 +12,6 @@ import { isDecisionFeatureActive } from '../decisions/resolve.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { readPluginName } from '../utils/workspace.ts';
 import { formatBytes } from '../utils/binary-detection.ts';
-import { getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
-import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
 import {
@@ -24,27 +23,6 @@ import { findGitRepositoryRoot } from './developer-context.ts';
 
 /** Maximum size of CLAUDE.md file to include (10KB) */
 const MAX_CONTEXT_FILE_SIZE = 10 * 1024;
-
-/** Maximum number of context files to discover in monorepo */
-const MAX_CONTEXT_FILES = 30;
-
-/**
- * Directories to exclude when searching for context files.
- * These are common build output, dependency, and cache directories.
- */
-const EXCLUDED_DIRECTORIES = [
-  'node_modules',
-  '.git',
-  'dist',
-  'build',
-  '.next',
-  'coverage',
-  'vendor',
-  '.cache',
-  '.turbo',
-  'out',
-  '.output',
-];
 
 /**
  * Context file patterns to look for in working directory (in priority order).
@@ -65,98 +43,6 @@ function findFileCaseInsensitive(directory: string, pattern: string): string | n
     return files.find((f) => f.toLowerCase() === lowerPattern) ?? null;
   } catch {
     return null;
-  }
-}
-
-/**
- * Find a project context file (AGENTS.md or CLAUDE.md) in the directory.
- * Just checks if file exists, doesn't read content.
- * Returns the actual filename if found, null otherwise.
- */
-export function findProjectContextFile(directory: string): string | null {
-  for (const pattern of CONTEXT_FILE_PATTERNS) {
-    const actualFilename = findFileCaseInsensitive(directory, pattern);
-    if (actualFilename) {
-      debug(`[findProjectContextFile] Found ${actualFilename}`);
-      return actualFilename;
-    }
-  }
-  return null;
-}
-
-// ── Context file cache ──────────────────────────────────────────────────
-// The glob walk is expensive (~7s in large monorepos). The result (a list of
-// file paths like "CLAUDE.md", "apps/electron/CLAUDE.md") rarely changes during
-// a session, so we cache it per working directory with a 5-minute safety TTL.
-// Explicit invalidation happens on working directory changes.
-
-const contextFileCache = new Map<string, { files: string[]; ts: number }>();
-const CONTEXT_FILE_CACHE_TTL = 5 * 60_000; // 5 minutes
-
-/** Invalidate the cached context file list for a directory (or all directories). */
-export function invalidateContextFileCache(directory?: string): void {
-  if (directory) {
-    contextFileCache.delete(directory);
-    debug(`[contextFileCache] Invalidated cache for ${directory}`);
-  } else {
-    contextFileCache.clear();
-    debug(`[contextFileCache] Cleared all cached entries`);
-  }
-}
-
-/**
- * Find all project context files (AGENTS.md or CLAUDE.md) recursively in a directory.
- * Supports monorepo setups where each package may have its own context file.
- * Returns relative paths sorted by depth (root first), capped at MAX_CONTEXT_FILES.
- *
- * Results are cached per directory. Call invalidateContextFileCache() on working
- * directory changes. A 5-minute TTL acts as a safety net for cache staleness.
- */
-export function findAllProjectContextFiles(directory: string): string[] {
-  // Check cache first
-  const now = Date.now();
-  const cached = contextFileCache.get(directory);
-  if (cached && now - cached.ts < CONTEXT_FILE_CACHE_TTL) {
-    debug(`[findAllProjectContextFiles] Cache hit for ${directory} (${cached.files.length} files)`);
-    return cached.files;
-  }
-
-  try {
-    // Build glob ignore patterns from excluded directories
-    const ignorePatterns = EXCLUDED_DIRECTORIES.map((dir) => `**/${dir}/**`);
-
-    // Search for all context files (case-insensitive via nocase option)
-    const pattern = '**/{agents,claude}.md';
-    const matches = globSync(pattern, {
-      cwd: directory,
-      nocase: true,
-      ignore: ignorePatterns,
-      absolute: false,
-    });
-
-    if (matches.length === 0) {
-      contextFileCache.set(directory, { files: [], ts: now });
-      return [];
-    }
-
-    // Sort by depth (fewer slashes = shallower = higher priority), then alphabetically
-    // Root files come first, then nested packages
-    const sorted = matches.sort((a, b) => {
-      const depthA = (a.match(/\//g) || []).length;
-      const depthB = (b.match(/\//g) || []).length;
-      if (depthA !== depthB) return depthA - depthB;
-      return a.localeCompare(b);
-    });
-
-    // Cap at max files to avoid overwhelming the prompt
-    const capped = sorted.slice(0, MAX_CONTEXT_FILES);
-
-    debug(`[findAllProjectContextFiles] Found ${matches.length} files, returning ${capped.length}`);
-    contextFileCache.set(directory, { files: capped, ts: now });
-    return capped;
-  } catch (error) {
-    debug(`[findAllProjectContextFiles] Error searching directory:`, error);
-    return [];
   }
 }
 
@@ -190,6 +76,114 @@ export function readProjectContextFile(directory: string): { filename: string; c
     }
   }
   return null;
+}
+
+function isSameOrChildPath(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+type ProjectContextDirectoryLabel = 'context root' | 'repository root' | 'parent context' | 'working directory';
+
+/**
+ * Directories whose context files apply to the selected working directory, root first:
+ * every folder from the base down to the selection. The base is whichever of the context
+ * root (when the selection is inside it) and the selection's git repository root encloses
+ * the other, else the selection itself; a context root the selection lies outside of is
+ * still listed in front.
+ */
+function getProjectContextSearchDirectories(
+  workingDirectory: string,
+  contextRootPath?: string,
+): Array<{ directory: string; label: ProjectContextDirectoryLabel }> {
+  const selectedDir = resolve(workingDirectory);
+  const rootDir = contextRootPath ? resolve(contextRootPath) : undefined;
+  const gitRoot = findGitRepositoryRoot(selectedDir) ?? undefined;
+  const rootEnclosesSelection = rootDir !== undefined && isSameOrChildPath(rootDir, selectedDir);
+  const directories: Array<{ directory: string; label: ProjectContextDirectoryLabel }> = [];
+
+  if (rootDir && !rootEnclosesSelection) {
+    directories.push({ directory: rootDir, label: 'context root' });
+  }
+
+  let baseDir = selectedDir;
+  for (const boundary of [rootEnclosesSelection ? rootDir : undefined, gitRoot]) {
+    if (boundary && isSameOrChildPath(boundary, baseDir)) baseDir = boundary;
+  }
+
+  const chain: string[] = [];
+  for (let dir = selectedDir; ; dir = dirname(dir)) {
+    chain.unshift(dir);
+    if (dir === baseDir || dirname(dir) === dir) break;
+  }
+
+  for (const directory of chain) {
+    const label: ProjectContextDirectoryLabel = directory === selectedDir
+      ? 'working directory'
+      : directory === rootDir
+        ? 'context root'
+        : directory === gitRoot
+          ? 'repository root'
+          : 'parent context';
+    directories.push({ directory, label });
+  }
+  return directories;
+}
+
+/**
+ * The context files of one directory, AGENTS.md first, from a single directory read.
+ * When the engine reads this directory and loads its CLAUDE.md itself, that file is left
+ * out, and so is an AGENTS.md that is the same file. The engine opens the exact name
+ * CLAUDE.md, so on a case-sensitive file system a claude.md is not loaded and stays
+ * listed. A CLAUDE.md that is the same file as the AGENTS.md beside it is listed once.
+ */
+function findContextFilesInDirectory(directory: string, engineReadsDirectory: boolean): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch {
+    return [];
+  }
+
+  const agentsFile = entries.find((name) => name.toLowerCase() === 'agents.md');
+  const claudeFile = entries.find((name) => name.toLowerCase() === 'claude.md');
+  const engineLoadsClaudeFile = engineReadsDirectory && claudeFile !== undefined &&
+    (claudeFile === 'CLAUDE.md' || isSameFile(join(directory, claudeFile), join(directory, 'CLAUDE.md')));
+  if (agentsFile && claudeFile && isSameFile(join(directory, agentsFile), join(directory, claudeFile))) {
+    return engineLoadsClaudeFile ? [] : [agentsFile];
+  }
+
+  const files: string[] = [];
+  if (agentsFile) files.push(agentsFile);
+  if (claudeFile && !engineLoadsClaudeFile) files.push(claudeFile);
+  return files;
+}
+
+/**
+ * Whether two paths open the same file: through links, and through a case alias on a
+ * case-insensitive file system. Compares device and inode, since Node's realpathSync
+ * keeps the casing it was given while Bun's returns the casing on disk.
+ */
+function isSameFile(a: string, b: string): boolean {
+  try {
+    const statA = statSync(a, { bigint: true });
+    const statB = statSync(b, { bigint: true });
+    return statA.dev === statB.dev && statA.ino === statB.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The workspace's default working directory, used as the context root. The workspace
+ * root itself is Craft's storage folder, never a project, so it is not a fallback.
+ */
+function getProjectContextRootDirectory(workspaceRootPath?: string): string | undefined {
+  if (!workspaceRootPath) {
+    return undefined;
+  }
+
+  return loadWorkspaceConfig(workspaceRootPath)?.defaults?.workingDirectory || undefined;
 }
 
 /**
@@ -268,76 +262,40 @@ export interface DebugModeConfig {
 
 /**
  * Get the project context files prompt section for the system prompt.
- * Lists all discovered context files (AGENTS.md, CLAUDE.md) in the working directory.
- * For monorepos, this includes nested package context files.
+ * Lists the context files (AGENTS.md, CLAUDE.md) of each directory from
+ * getProjectContextSearchDirectories() that has them.
+ *
+ * @param claudeEngineCwd - cwd of a Claude engine that loads CLAUDE.md files itself, from
+ *   this folder and every ancestor of it; those files are already in context and left out.
+ *   Undefined when nothing loads them (Pi, or the engine's loading turned off).
  * Returns empty string if no working directory or no context files found.
  */
-export function getProjectContextFilesPrompt(workingDirectory?: string): string {
+export function getProjectContextFilesPrompt(
+  workingDirectory?: string,
+  contextRootPath?: string,
+  claudeEngineCwd?: string,
+): string {
   if (!workingDirectory) {
     return '';
   }
 
-  const { contextRoot, contextFiles } = findRelevantProjectContextFiles(workingDirectory);
-  if (contextFiles.length === 0) {
+  const engineCwd = claudeEngineCwd ? resolve(claudeEngineCwd) : undefined;
+  const fileLines: string[] = [];
+  for (const { directory, label } of getProjectContextSearchDirectories(workingDirectory, contextRootPath)) {
+    const engineReadsDirectory = engineCwd !== undefined && isSameOrChildPath(directory, engineCwd);
+    for (const filename of findContextFilesInDirectory(directory, engineReadsDirectory)) {
+      fileLines.push(`- ${sanitizePromptLine(join(directory, filename), PROJECT_CONTEXT_FILES_TAGS)} (${label})`);
+    }
+  }
+
+  if (fileLines.length === 0) {
     return '';
   }
 
-  // Format file list with (root) annotation for top-level files. Paths are
-  // relative to contextRoot, which may be a git repository root when the
-  // selected working directory is nested inside a repo.
-  const fileList = contextFiles
-    .map((file) => {
-      const sanitized = sanitizePromptLine(file, PROJECT_CONTEXT_FILES_TAGS);
-      const isRoot = !sanitized.includes('/');
-      return `- ${sanitized}${isRoot ? ' (root)' : ''}`;
-    })
-    .join('\n');
-
-  const workingDirectoryAttr = escapePromptXmlAttr(workingDirectory);
-  const contextRootAttr = escapePromptXmlAttr(contextRoot);
-
   return `
-<project_context_files working_directory="${workingDirectoryAttr}" context_root="${contextRootAttr}">
-${fileList}
+<project_context_files working_directory="${escapePromptXmlAttr(workingDirectory)}">
+${fileLines.join('\n')}
 </project_context_files>`;
-}
-
-function findRelevantProjectContextFiles(workingDirectory: string): { contextRoot: string; contextFiles: string[] } {
-  const resolvedWorkingDirectory = resolve(workingDirectory);
-  const gitRoot = findGitRepositoryRoot(resolvedWorkingDirectory);
-  if (!gitRoot) {
-    return {
-      contextRoot: resolvedWorkingDirectory,
-      contextFiles: findAllProjectContextFiles(resolvedWorkingDirectory),
-    };
-  }
-
-  const contextRoot = resolve(gitRoot);
-  const allFiles = findAllProjectContextFiles(contextRoot);
-  const selectedRel = normalizePromptPath(relative(contextRoot, resolvedWorkingDirectory));
-  if (!selectedRel || selectedRel === '.') {
-    return { contextRoot, contextFiles: allFiles };
-  }
-
-  const relevant = allFiles.filter((file) => {
-    const normalizedFile = normalizePromptPath(file);
-    const dir = normalizePromptPath(dirname(normalizedFile));
-    const normalizedDir = dir === '.' ? '' : dir;
-
-    // Always include root instructions, include ancestors of the selected CWD,
-    // and include context files below the selected subtree. This keeps nested
-    // package sessions useful without dumping every unrelated monorepo package.
-    return normalizedDir === '' ||
-      selectedRel === normalizedDir ||
-      selectedRel.startsWith(`${normalizedDir}/`) ||
-      normalizedDir.startsWith(`${selectedRel}/`);
-  });
-
-  return { contextRoot, contextFiles: relevant.length > 0 ? relevant : allFiles.slice(0, 1) };
-}
-
-function normalizePromptPath(value: string): string {
-  return value.replace(/\\/g, '/');
 }
 
 /** Options for getSystemPrompt */
@@ -403,6 +361,7 @@ Use config_validate to verify changes match the expected schema.
  * @param workingDirectory - Working directory for context file discovery
  * @param preset - System prompt preset ('default' | 'mini' | custom string)
  * @param backendName - Backend name for "powered by X" text (default: 'Claude Code')
+ * @param claudeEngineCwd - cwd of a Claude engine that loads CLAUDE.md files itself (see getProjectContextFilesPrompt)
  */
 export function getSystemPrompt(
   pinnedPreferencesPrompt?: string,
@@ -413,6 +372,7 @@ export function getSystemPrompt(
   backendName?: string,
   includeCoAuthoredBy?: boolean,
   projectContext?: ProjectPromptContext,
+  claudeEngineCwd?: string,
 ): string {
   // Use mini agent prompt for quick edits (pass workspace root for config paths)
   if (preset === 'mini') {
@@ -424,8 +384,11 @@ export function getSystemPrompt(
   const preferences = pinnedPreferencesPrompt ?? formatPreferencesForPrompt();
   const debugContext = debugMode?.enabled ? formatDebugModeContext(debugMode.logFilePath) : '';
 
-  // Get project context files for monorepo support (lives in system prompt for persistence across compaction)
-  const projectContextFiles = getProjectContextFilesPrompt(workingDirectory);
+  // Get project context files (lives in system prompt for persistence across compaction).
+  // The context root is the configured default working directory; without one the git root of the
+  // working directory is used. workspaceRootPath is Craft's storage folder and never a context root.
+  const projectContextRootDirectory = getProjectContextRootDirectory(workspaceRootPath);
+  const projectContextFiles = getProjectContextFilesPrompt(workingDirectory, projectContextRootDirectory, claudeEngineCwd);
 
   // Optional workspace-project context (injected after preferences, before debug+context-files)
   const projectBlock = projectContext ? formatProjectContextForPrompt(projectContext) : '';
@@ -714,9 +677,11 @@ Skills resolution priority (highest first):
 
 ## Project Context
 
-When \`<project_context_files>\` appears in the system prompt, it lists discovered context files (CLAUDE.md, AGENTS.md). In git repositories, paths are relative to \`context_root\` and are filtered toward the selected working directory so monorepo package sessions still see root and path-specific guidance.
+When \`<project_context_files>\` appears in the system prompt, it lists the context files (AGENTS.md, CLAUDE.md) that apply to the working directory, root first: from the context root (the workspace default working directory) or the git repository root, whichever encloses the other, down through every folder to the working directory. If the working directory is outside the context root, the context root's files are listed first. CLAUDE.md files already loaded into your context are not listed.
 
-Read relevant context files using the Read tool - they contain architecture info, conventions, and project-specific guidance. Read the root file first, then path/package-specific files as needed.
+**CRITICAL INSTRUCTION**: Listed files are NOT loaded into your context automatically. You MUST read ALL of them using the Read tool, from root to working directory, before acting (skip one whose contents already appear in your context, e.g. through a CLAUDE.md \`@AGENTS.md\` import), and read a file again when its contents are no longer in your context (e.g. after compaction).
+**Subfolders**: When the task moves into a subfolder of the working directory that has its own AGENTS.md (or CLAUDE.md), read that file before working there.
+**Priority Rule**: The closest file to the working directory wins. Rules in the working directory override parent rules, and parent rules override root rules.
 
 ## Configuration Documentation
 
