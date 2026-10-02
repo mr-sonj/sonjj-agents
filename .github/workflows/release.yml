@@ -127,6 +127,9 @@ jobs:
           fi
           [ -x "$app/Contents/Resources/app/resources/bin/darwin-arm64/uv" ] || { echo "::error::uv missing"; exit 1; }
           [ -f "$app/Contents/Resources/app/resources/pi-agent-server/index.js" ] || { echo "::error::pi-agent-server missing"; exit 1; }
+          for dup in pi-agent-server bin/darwin-arm64; do
+            [ ! -e "$app/Contents/Resources/app/dist/resources/$dup" ] || { echo "::error::$dup packaged twice (dist/resources)"; exit 1; }
+          done
           codesign --verify --deep --strict "$app"
           codesign -dv "$app" 2>&1 | grep -E '^(Identifier|Signature)'
 
@@ -186,6 +189,9 @@ jobs:
           fi
           [ -f "$app/resources/app/resources/bin/win32-x64/uv.exe" ] || { echo "::error::uv missing"; exit 1; }
           [ -f "$app/resources/app/resources/pi-agent-server/index.js" ] || { echo "::error::pi-agent-server missing"; exit 1; }
+          for dup in pi-agent-server bin/win32-x64; do
+            [ ! -e "$app/resources/app/dist/resources/$dup" ] || { echo "::error::$dup packaged twice (dist/resources)"; exit 1; }
+          done
 
       - name: Upload
         uses: actions/upload-artifact@v4
@@ -218,6 +224,21 @@ jobs:
 
       - name: Build AppImage (x64)
         run: bash apps/electron/scripts/build-linux.sh x64
+
+      - name: Check the AppImage
+        run: |
+          ls apps/electron/release
+          [ -f apps/electron/release/Sonjj-Agents-x64.AppImage ] || { echo "::error::Sonjj-Agents-x64.AppImage missing"; exit 1; }
+          app=apps/electron/release/linux-unpacked
+          if [ -e "$app/resources/app-update.yml" ]; then
+            echo "::error::app-update.yml present: the app would look for updates"
+            exit 1
+          fi
+          [ -x "$app/resources/app/resources/bin/linux-x64/uv" ] || { echo "::error::uv missing"; exit 1; }
+          [ -f "$app/resources/app/resources/pi-agent-server/index.js" ] || { echo "::error::pi-agent-server missing"; exit 1; }
+          for dup in pi-agent-server bin/linux-x64; do
+            [ ! -e "$app/resources/app/dist/resources/$dup" ] || { echo "::error::$dup packaged twice (dist/resources)"; exit 1; }
+          done
 
       - name: Upload
         uses: actions/upload-artifact@v4
