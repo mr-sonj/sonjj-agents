@@ -6,7 +6,8 @@
 # files are kept as workflow artifacts for a few days instead of being published.
 #
 # Builds are not signed. Branding (scripts/apply-branding.ts) is applied to the checkout before
-# every build, as Craft's trademark policy asks of forks.
+# every build, as Craft's trademark policy asks of forks. Nothing is published unless the same
+# commit passes fork-validate.yml (typecheck, upstream's tests, the fork's tests).
 
 name: Release
 
@@ -82,6 +83,9 @@ jobs:
           name: release-notes
           path: release-notes.md
           retention-days: 3
+
+  validate:
+    uses: ./.github/workflows/fork-validate.yml
 
   mac:
     needs: prepare
@@ -298,7 +302,7 @@ jobs:
           retention-days: 3
 
   release:
-    needs: [prepare, mac, windows, linux, server]
+    needs: [prepare, validate, mac, windows, linux, server]
     runs-on: ubuntu-latest
     permissions:
       contents: write
