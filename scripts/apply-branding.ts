@@ -140,7 +140,8 @@ function brandLogo(file: string, text: string, svg: { viewBox: string; d: string
 
 /**
  * Work out every change without touching the disk. `read` returns a repo-relative file's
- * text (or null if missing); tests pass their own to check idempotency.
+ * text (or null if missing); tests pass their own to check idempotency. `scan` lists the files
+ * a glob matches; tests pass Windows-style paths through it.
  */
 export function planBranding(
   root: string,
@@ -149,6 +150,7 @@ export function planBranding(
     const p = join(root, rel)
     return existsSync(p) ? readFileSync(p, 'utf8') : null
   },
+  scan: (pattern: string) => Iterable<string> = pattern => new Glob(pattern).scanSync({ cwd: root }),
 ): BrandingPlan {
   const texts = new Map<string, string>()
   const get = (rel: string): string => {
@@ -160,7 +162,9 @@ export function planBranding(
   const set = (rel: string, text: string) => texts.set(rel, text)
 
   for (const pattern of RENAME_GLOBS) {
-    for (const rel of new Glob(pattern).scanSync({ cwd: root })) {
+    // Glob yields `\` paths on Windows; the rules below key files by `/` paths, so a file kept
+    // under both would be written twice and the last write would drop the rename.
+    for (const rel of [...scan(pattern)].map(path => path.replaceAll('\\', '/'))) {
       if (RENAME_SKIP_PATH.test(rel)) continue
       set(rel, renameText(get(rel), brand))
     }
