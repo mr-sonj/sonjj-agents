@@ -92,6 +92,7 @@ release pipeline:
   the WhatsApp worker.
 - Packaged apps include `uv`, which the document tools (PDF, Office, markitdown) run on; it used to be
   downloaded only by the dev build.
+- The Pi agent server and `uv` are packaged once, not a second time under `dist/resources`.
 - The renderer build dedupes the Radix menu packages, so dropdown menus from the shared UI package work
   in a Bun workspace build.
 - macOS shows a proper prompt for Documents, Desktop and Downloads access.
