@@ -1,6 +1,6 @@
 # Features
 
-Changes this fork (Sonjj Agents) adds on top of [Craft Agents](https://github.com/lukilabs/craft-agents-oss).
+Changes this fork (Sonjj Agents) adds on top of [Craft Agents](https://github.com/craft-ai-agents/craft-agents-oss).
 Each feature lives on its own branch, based on `main` (a clean copy of upstream). The default branch
 `mod` merges all of them. To take just one feature, merge its branch into your own checkout of upstream.
 
