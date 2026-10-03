@@ -2,7 +2,7 @@
 
 Releases of Sonjj Agents. A version is `<Craft Agents version>-mod.<n>`: the upstream release it is
 built on, then a counter for this fork's releases on top of it. Changes that come from upstream are in
-the [Craft Agents releases](https://github.com/lukilabs/craft-agents-oss/releases); each feature is
+the [Craft Agents releases](https://github.com/craft-ai-agents/craft-agents-oss/releases); each feature is
 described in [FEATURES.md](FEATURES.md). A release with no section here has a short generated
 note on its [release page](https://github.com/mr-sonj/sonjj-agents/releases).
 
