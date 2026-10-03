@@ -1,6 +1,6 @@
 # Scans this fork's own commits for secrets (tokens, keys, passwords) on every push and PR.
 # Commits that came from upstream (reachable from main) are left out: main mirrors
-# lukilabs/craft-agents-oss, and its history is upstream's to look after.
+# craft-ai-agents/craft-agents-oss, and its history is upstream's to look after.
 
 name: Gitleaks
 

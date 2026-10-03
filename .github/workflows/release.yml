@@ -75,7 +75,7 @@ jobs:
             upstream="${VERSION%-mod.*}"
             repo="https://github.com/$GITHUB_REPOSITORY"
             {
-              echo "Built on [Craft Agents $upstream](https://github.com/lukilabs/craft-agents-oss/releases/tag/v$upstream),"
+              echo "Built on [Craft Agents $upstream](https://github.com/craft-ai-agents/craft-agents-oss/releases/tag/v$upstream),"
               echo "with this fork's features ([FEATURES.md]($repo/blob/$GITHUB_REF_NAME/FEATURES.md))."
               echo ""
               echo "Builds are not signed; the [README]($repo#readme) explains how to open them."
