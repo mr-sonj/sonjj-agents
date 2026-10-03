@@ -4,7 +4,7 @@
 #   scripts/fork/sync.sh           update main, rebase every feature branch onto it, rebuild mod
 #   scripts/fork/sync.sh --push    the same, then push main, the feature branches and mod to origin
 #
-# Remotes: `upstream` = https://github.com/lukilabs/craft-agents-oss.git, `origin` = your fork.
+# Remotes: `upstream` = https://github.com/craft-ai-agents/craft-agents-oss.git, `origin` = your fork.
 # Branch model (see FEATURES.md): main mirrors upstream, each feature lives on its own branch
 # based on main, and mod = main + every feature branch merged in the order of FEATURES below.
 #
@@ -149,7 +149,7 @@ main() {
 
     cd "$(git rev-parse --show-toplevel)"
     git remote get-url upstream >/dev/null 2>&1 \
-        || die "No 'upstream' remote. Add it: git remote add upstream https://github.com/lukilabs/craft-agents-oss.git"
+        || die "No 'upstream' remote. Add it: git remote add upstream https://github.com/craft-ai-agents/craft-agents-oss.git"
     git remote get-url origin >/dev/null 2>&1 || die "No 'origin' remote."
     if [ -d "$(git rev-parse --git-path rebase-merge)" ] || [ -d "$(git rev-parse --git-path rebase-apply)" ] \
         || [ -f "$(git rev-parse --git-path MERGE_HEAD)" ]; then
