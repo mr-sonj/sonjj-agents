@@ -1,6 +1,6 @@
 # Branding
 
-Sonjj Agents is a fork of [Craft Agents](https://github.com/lukilabs/craft-agents-oss). Craft's
+Sonjj Agents is a fork of [Craft Agents](https://github.com/craft-ai-agents/craft-agents-oss). Craft's
 [trademark policy](../TRADEMARK.md) asks forks to ship under their own name, icon and bundle id, so
 release builds are branded here. The source keeps upstream's names so syncing with upstream stays
 conflict-free; the rename is applied to a checkout right before building.
