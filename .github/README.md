@@ -1,6 +1,6 @@
 # Sonjj Agents
 
-A fork of [Craft Agents](https://github.com/lukilabs/craft-agents-oss) with a few extra features,
+A fork of [Craft Agents](https://github.com/craft-ai-agents/craft-agents-oss) with a few extra features,
 kept in sync with upstream. Everything Craft Agents does works the same here; the
 [upstream README](../README.md) is the guide to the app itself.
 
@@ -119,7 +119,7 @@ To keep your own fork in step with upstream, add upstream as a remote and run th
 `mod`:
 
 ```bash
-git remote add upstream https://github.com/lukilabs/craft-agents-oss.git
+git remote add upstream https://github.com/craft-ai-agents/craft-agents-oss.git
 scripts/fork/sync.sh           # update main, rebase each feature branch, rebuild mod
 ```
 
