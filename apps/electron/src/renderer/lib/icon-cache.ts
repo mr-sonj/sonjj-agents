@@ -290,6 +290,15 @@ export function getSourceIconSync(workspaceId: string, slug: string): string | n
 // ============================================================================
 
 /**
+ * The workspace image path to ask for a skill's icon file: `skills/{slug}/{file}`. The skill
+ * may load from a custom, extra or global folder; the server looks the slug up in the same
+ * order skills load (icon files sit directly in the skill folder).
+ */
+export function skillIconRequestPath(slug: string, iconPath: string): string {
+  return `skills/${slug}/${iconPath.split(/[\\/]/).pop()}`
+}
+
+/**
  * Load a skill icon into the cache.
  *
  * Resolution priority (mirrors loadSourceIcon):
@@ -327,14 +336,10 @@ export async function loadSkillIcon(
 
   // Priority 3: Known icon path - load file
   if (skill.iconPath) {
-    const skillsMatch = skill.iconPath.match(/skills\/([^/]+)\/(.+)$/)
-    if (skillsMatch) {
-      const relativePath = `skills/${skillsMatch[1]}/${skillsMatch[2]}`
-      const loaded = await loadWorkspaceIcon(workspaceId, relativePath)
-      if (loaded) {
-        skillIconCache.set(cacheKey, loaded)
-        return loaded
-      }
+    const loaded = await loadWorkspaceIcon(workspaceId, skillIconRequestPath(skill.slug, skill.iconPath))
+    if (loaded) {
+      skillIconCache.set(cacheKey, loaded)
+      return loaded
     }
   }
 

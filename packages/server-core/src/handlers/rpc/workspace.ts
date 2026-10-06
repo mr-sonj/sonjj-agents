@@ -7,6 +7,7 @@ import { perf } from '@craft-agent/shared/utils'
 import { pushTyped, type RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { isValidWorkspaceRootPath } from '../../utils/path-validation'
+import { resolveWorkspaceImagePath } from '../../utils/workspace-image-path'
 
 export const CORE_HANDLED_CHANNELS = [
   RPC_CHANNELS.workspaces.GET,
@@ -151,8 +152,7 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) throw new Error('Workspace not found')
 
-    const { readFileSync, existsSync } = await import('fs')
-    const { join, normalize } = await import('path')
+    const { readFileSync } = await import('fs')
 
     // Security: validate path
     // - Must not contain .. (path traversal)
@@ -168,15 +168,11 @@ export function registerWorkspaceCoreHandlers(server: RpcServer, deps: HandlerDe
       throw new Error(`Invalid file type: ${ext}. Allowed: ${ALLOWED_EXTENSIONS.join(', ')}`)
     }
 
-    // Resolve path relative to workspace root
-    const absolutePath = normalize(join(workspace.rootPath, relativePath))
+    // Resolve path relative to workspace root; skill and source icons come from the folders
+    // they load from (custom, extra or global ones too). Stays inside that folder.
+    const absolutePath = resolveWorkspaceImagePath(workspace.rootPath, relativePath)
 
-    // Double-check the resolved path is still within workspace
-    if (!absolutePath.startsWith(workspace.rootPath)) {
-      throw new Error('Invalid path: outside workspace directory')
-    }
-
-    if (!existsSync(absolutePath)) {
+    if (!absolutePath) {
       return null  // Missing optional files - silent fallback to default icons
     }
 
