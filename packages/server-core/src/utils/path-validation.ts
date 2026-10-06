@@ -189,9 +189,10 @@ export function savedExtraSkillDirs(value: unknown): string[] {
 }
 
 /**
- * Clean up a new `extraSkillDirs` list (trim, drop blanks and repeats; `dirs` is undefined
- * when nothing is left) and check each entry not in `saved` with isValidExtraSkillDir.
- * Saved entries stay as they are, so a folder that went away does not block other edits.
+ * Clean up a new `extraSkillDirs` list (trim, drop blanks, keep the first entry for each folder
+ * however it is written; `dirs` is undefined when nothing is left) and check each entry whose
+ * folder is not in `saved` with isValidExtraSkillDir. Saved folders stay as they are, so a
+ * folder that went away does not block other edits.
  */
 export function validateExtraSkillDirs(
   value: unknown,
@@ -203,11 +204,18 @@ export function validateExtraSkillDirs(
     return { valid: false, reason: 'Extra skill folders must be a list of paths.' }
   }
 
-  const dirs = Array.from(new Set((value as string[]).map(entry => entry.trim()).filter(Boolean)))
-  for (const entry of dirs) {
-    if (saved.includes(entry)) continue
-    const validation = isValidExtraSkillDir(entry, workspaceRoot)
-    if (!validation.valid) return validation
+  const savedPaths = new Set(saved.map(entry => getExtraSkillsPath(workspaceRoot, entry)))
+  const seen = new Set<string>()
+  const dirs: string[] = []
+  for (const entry of (value as string[]).map(entry => entry.trim()).filter(Boolean)) {
+    const path = getExtraSkillsPath(workspaceRoot, entry)
+    if (seen.has(path)) continue
+    seen.add(path)
+    if (!savedPaths.has(path)) {
+      const validation = isValidExtraSkillDir(entry, workspaceRoot)
+      if (!validation.valid) return validation
+    }
+    dirs.push(entry)
   }
   return { valid: true, dirs: dirs.length > 0 ? dirs : undefined }
 }

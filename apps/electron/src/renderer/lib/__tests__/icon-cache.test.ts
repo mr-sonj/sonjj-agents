@@ -312,3 +312,27 @@ describe('string method null safety', () => {
     }
   })
 })
+
+// ============================================================================
+// Skill icon request paths
+// ============================================================================
+
+describe('skill icon request path', () => {
+  it('asks for skills/{slug}/{file} wherever the skill folder is', async () => {
+    const { skillIconRequestPath } = await import('../icon-cache')
+    expect(skillIconRequestPath('review', '/Users/me/code/skill-lib/review/icon.png')).toBe('skills/review/icon.png')
+    expect(skillIconRequestPath('review', 'C:\\Users\\me\\lib\\review\\icon.svg')).toBe('skills/review/icon.svg')
+  })
+
+  it('loads a skill icon from a folder not named skills', async () => {
+    mockReadWorkspaceImage.mockImplementation((_workspaceId: string, path: string) =>
+      Promise.resolve(path === 'skills/lib-skill/icon.jpg' ? 'data:image/jpeg;base64,AA==' : null))
+    const { loadSkillIcon } = await import('../icon-cache')
+
+    const icon = await loadSkillIcon(
+      { slug: 'lib-skill', iconPath: '/Users/me/code/lib/lib-skill/icon.jpg', metadata: {} } as unknown as Parameters<typeof loadSkillIcon>[0],
+      'workspace-id',
+    )
+    expect(icon).toBe('data:image/jpeg;base64,AA==')
+  })
+})

@@ -73,7 +73,9 @@ A workspace can load skills from more folders with `extraSkillDirs` in its `conf
 ```
 
 - Each entry is one folder, holding skills as `{folder}/{slug}/SKILL.md`; `~` is the home folder
-  and a relative path starts at the workspace folder. Folders that do not exist are skipped.
+  and a relative path starts at the workspace folder. Folders that do not exist are skipped, and so
+  is an entry that names a folder already listed (also through a symlink), the workspace skills
+  directory or `~/.agents/skills`, which load as their own levels.
 - These skills are marked **extra** and cannot be deleted or sent to another workspace from the app;
   editing one changes the file in its own folder. New skills still go in the workspace skills directory.
 - Changing the setting refreshes the skills list at once. Extra folders are not watched (like
