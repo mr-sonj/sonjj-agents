@@ -1516,6 +1516,7 @@
   "skillInfo.failedToLoad": "Skill konnte nicht geladen werden",
   "skillInfo.guardedDesc": "Keine Auswirkung — Aufrufe laufen ohne Rückfrage, sofern das Entscheidungsmodell keinen markiert",
   "skillInfo.instructions": "Anweisungen",
+  "skillInfo.managedByExtraFolder": "In zusätzlichem Ordner verwaltet",
   "skillInfo.managedByProject": "Vom Projekt verwaltet",
   "skillInfo.metadata": "Metadaten",
   "skillInfo.noInstructions": "*Keine Anweisungen angegeben.*",

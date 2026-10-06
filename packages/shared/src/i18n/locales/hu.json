@@ -1516,6 +1516,7 @@
   "skillInfo.failedToLoad": "A készség betöltése sikertelen",
   "skillInfo.guardedDesc": "Nincs hatás — a hívások megerősítés nélkül futnak, hacsak a döntési modell meg nem jelöl egyet",
   "skillInfo.instructions": "Utasítások",
+  "skillInfo.managedByExtraFolder": "További mappában kezelve",
   "skillInfo.managedByProject": "Projekt kezeli",
   "skillInfo.metadata": "Metaadatok",
   "skillInfo.noInstructions": "*Nem adtak meg utasításokat.*",

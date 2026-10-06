@@ -334,11 +334,14 @@ export default function WorkspaceSettingsPage() {
     }
   }, [updateWorkspaceSetting])
 
-  // The server cleans up the list, so read back what it saved
+  // The server cleans up the list, so read back what it saved (null: not saved)
   const handleSaveExtraSkillDirs = useCallback(async (dirs: string[]) => {
-    if (!activeWorkspaceId || !(await updateWorkspaceSetting('extraSkillDirs', dirs))) return
+    if (!activeWorkspaceId || !(await updateWorkspaceSetting('extraSkillDirs', dirs))) return null
     const settings = await window.electronAPI.getWorkspaceSettings(activeWorkspaceId)
-    setExtraSkillDirs(settings?.extraSkillDirs ?? [])
+    if (!settings) return null
+    const saved = settings.extraSkillDirs ?? []
+    setExtraSkillDirs(saved)
+    return saved
   }, [activeWorkspaceId, updateWorkspaceSetting])
 
   const handleLocalMcpEnabledChange = useCallback(

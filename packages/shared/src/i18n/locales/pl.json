@@ -1516,6 +1516,7 @@
   "skillInfo.failedToLoad": "Nie udało się załadować umiejętności",
   "skillInfo.guardedDesc": "Bez efektu — wywołania działają bez pytań, chyba że model decyzyjny oznaczy któreś",
   "skillInfo.instructions": "Instrukcje",
+  "skillInfo.managedByExtraFolder": "Zarządzane w dodatkowym folderze",
   "skillInfo.managedByProject": "Zarządzane przez projekt",
   "skillInfo.metadata": "Metadane",
   "skillInfo.noInstructions": "*Nie podano instrukcji.*",

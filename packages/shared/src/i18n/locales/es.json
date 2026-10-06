@@ -1516,6 +1516,7 @@
   "skillInfo.failedToLoad": "No se pudo cargar la skill",
   "skillInfo.guardedDesc": "Sin efecto — las llamadas se ejecutan sin confirmación salvo que el modelo de decisión marque alguna",
   "skillInfo.instructions": "Instrucciones",
+  "skillInfo.managedByExtraFolder": "Gestionada en una carpeta adicional",
   "skillInfo.managedByProject": "Gestionada por el proyecto",
   "skillInfo.metadata": "Metadatos",
   "skillInfo.noInstructions": "*No se han proporcionado instrucciones.*",

@@ -1516,6 +1516,7 @@
   "skillInfo.failedToLoad": "无法加载技能",
   "skillInfo.guardedDesc": "无效——除非决策模型标记，否则调用无需确认即可运行",
   "skillInfo.instructions": "说明",
+  "skillInfo.managedByExtraFolder": "在额外文件夹中管理",
   "skillInfo.managedByProject": "由项目管理",
   "skillInfo.metadata": "元数据",
   "skillInfo.noInstructions": "*未提供说明。*",

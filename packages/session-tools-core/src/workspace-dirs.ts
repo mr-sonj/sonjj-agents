@@ -9,9 +9,9 @@
  * (no dependency on shared) use it directly, so every process resolves the same folders.
  */
 
-import { readFileSync, statSync } from 'node:fs';
+import { readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { isAbsolute, join, normalize, resolve } from 'node:path';
+import { isAbsolute, join, resolve } from 'node:path';
 
 interface WorkspaceDirs {
   /** Identity of config.json when it was read; an edit or an atomic replace changes it. */
@@ -38,7 +38,8 @@ export function expandWorkspaceDirPath(rawPath: string, workspaceRootPath: strin
   if (expanded === '~') return home;
   if (expanded.startsWith('~/')) expanded = join(home, expanded.slice(2));
   expanded = expanded.replace(/\$\{HOME\}/g, home).replace(/\$HOME(?=\/|$)/g, home);
-  return isAbsolute(expanded) ? normalize(expanded) : resolve(workspaceRootPath, expanded);
+  // resolve() also drops a trailing slash, so one folder always expands to one path
+  return isAbsolute(expanded) ? resolve(expanded) : resolve(workspaceRootPath, expanded);
 }
 
 function readWorkspaceDirs(workspaceRootPath: string): WorkspaceDirs | null {
@@ -94,16 +95,30 @@ export function resolveSkillsDir(workspaceRootPath: string): string {
 
 /**
  * The workspace's extra skill folders from `extraSkillDirs`, in the order listed, each folder
- * once; folders that do not exist are skipped.
+ * once even when reached through a symlink; folders that do not exist are skipped, and so are
+ * the workspace skills folder and ~/.agents/skills, which load as their own levels.
  */
 export function resolveExtraSkillDirs(workspaceRootPath: string): string[] {
-  return Array.from(new Set(readWorkspaceDirs(workspaceRootPath)?.extraSkillDirs ?? [])).filter(isDirectory);
+  const dirs = readWorkspaceDirs(workspaceRootPath)?.extraSkillDirs ?? [];
+  if (dirs.length === 0) return [];
+
+  const seen = new Set(
+    [resolveSkillsDir(workspaceRootPath), join(homedir(), '.agents', 'skills')].map(realDirectory),
+  );
+  return dirs.filter(dir => {
+    const real = realDirectory(dir);
+    if (real === null || seen.has(real)) return false;
+    seen.add(real);
+    return true;
+  });
 }
 
-function isDirectory(path: string): boolean {
+/** The folder's real path, or null when it is not an existing folder */
+function realDirectory(path: string): string | null {
   try {
-    return statSync(path).isDirectory();
+    const real = realpathSync.native(path);
+    return statSync(real).isDirectory() ? real : null;
   } catch {
-    return false;
+    return null;
   }
 }

@@ -1516,6 +1516,7 @@
   "skillInfo.failedToLoad": "Failed to load skill",
   "skillInfo.guardedDesc": "No effect — calls run without prompts unless the decision model flags one",
   "skillInfo.instructions": "Instructions",
+  "skillInfo.managedByExtraFolder": "Managed in an extra folder",
   "skillInfo.managedByProject": "Managed by project",
   "skillInfo.metadata": "Metadata",
   "skillInfo.noInstructions": "*No instructions provided.*",

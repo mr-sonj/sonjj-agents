@@ -160,7 +160,11 @@ export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory
             canShowInFinder={canRevealLocally}
             onDelete={canDeleteSkill ? handleDelete : undefined}
             canDelete={canDeleteSkill}
-            deleteLabel={canDeleteSkill ? t('skillInfo.deleteSkill') : t('skillInfo.managedByProject')}
+            deleteLabel={
+              canDeleteSkill ? t('skillInfo.deleteSkill') :
+              skill?.source === 'extra' ? t('skillInfo.managedByExtraFolder') :
+              t('skillInfo.managedByProject')
+            }
           />
         }
       />
