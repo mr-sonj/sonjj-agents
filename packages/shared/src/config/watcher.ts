@@ -16,14 +16,14 @@
  *   - permissions.json
  */
 
-import { watch, existsSync, readdirSync, statSync, readFileSync, mkdirSync } from 'fs';
-import { join, dirname, basename, relative } from 'path';
+import { watch, existsSync, readdirSync, statSync, readFileSync, mkdirSync, realpathSync } from 'fs';
+import { join, dirname, basename, relative, isAbsolute, sep } from 'path';
 import { platform } from 'os';
 import type { FSWatcher } from 'fs';
 import { CONFIG_DIR } from './paths.ts';
 import { debug } from '../utils/debug.ts';
 import { expandPath } from '../utils/paths.ts';
-import { readJsonFileSync } from '../utils/files.ts';
+import { readJsonFileSync, isDirectorySafe } from '../utils/files.ts';
 import { perf } from '../utils/perf.ts';
 import { loadStoredConfig, type StoredConfig } from './storage.ts';
 import {
@@ -70,6 +70,20 @@ const activeWatchers = new Map<string, string>(); // workspaceDir → creator wo
 /** Exported for testing only */
 export function _getActiveWatchers(): ReadonlyMap<string, string> {
   return activeWatchers;
+}
+
+/** True if `path` is `dir` or lies inside it */
+function isWithin(path: string, dir: string): boolean {
+  const rel = relative(dir, path);
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel));
+}
+
+function realpathOrSelf(path: string): string {
+  try {
+    return realpathSync(path);
+  } catch {
+    return path;
+  }
 }
 
 // ============================================================
@@ -221,6 +235,14 @@ export class ConfigWatcher {
   private knownSkills: Set<string> = new Set();
   private knownThemes: Set<string> = new Set();
 
+  // A custom sources/skills folder or symlinked source/skill folder is reported under the
+  // prefix it stands for ('skills', 'skills/my-skill'). A folder no watcher covers gets its
+  // own; one inside a watched tree is not watched twice: the events of the watcher `base`
+  // ('' = the workspace watcher, else an extra watcher's prefix) under `from` are repeated
+  // under the prefix instead.
+  private extraWatchers: Map<string, { dir: string; watcher: FSWatcher }> = new Map();
+  private routes: Map<string, { base: string; from: string }> = new Map();
+
   // Track LLM connections for change detection (JSON string for deep comparison)
   private lastLlmConnectionsHash: string = '';
 
@@ -303,6 +325,10 @@ export class ConfigWatcher {
     this.scanSkills();
     span.mark('scanSkills');
 
+    // Custom sources/skills folders and symlinked entries (after the scans create the folders)
+    this.syncExtraWatchers();
+    span.mark('syncExtraWatchers');
+
     this.scanAppThemes();
     span.mark('scanAppThemes');
 
@@ -361,6 +387,12 @@ export class ConfigWatcher {
     }
     this.watchers = [];
 
+    for (const { watcher } of this.extraWatchers.values()) {
+      watcher.close();
+    }
+    this.extraWatchers.clear();
+    this.routes.clear();
+
     this.knownSources.clear();
     this.knownSkills.clear();
     this.knownThemes.clear();
@@ -410,6 +442,8 @@ export class ConfigWatcher {
         // Normalize path separators
         const normalizedPath = filename.replace(/\\/g, '/');
         this.handleWorkspaceFileChange(normalizedPath, eventType);
+
+        this.repeatRoutedChange('', normalizedPath, eventType);
       });
 
       this.watchers.push(watcher);
@@ -419,11 +453,157 @@ export class ConfigWatcher {
     }
   }
 
+  // ============================================================
+  // Custom Directory and Symlink Watchers
+  // ============================================================
+
+  /**
+   * Watch `dir` recursively and route its events through handleWorkspaceFileChange as if
+   * they happened under `prefix` (an event for `SKILL.md` under prefix `skills/foo` is
+   * handled as `skills/foo/SKILL.md`).
+   */
+  private watchExtraDir(prefix: string, dir: string): void {
+    this.unwatchExtraDir(prefix);
+    try {
+      const watcher = watch(dir, { recursive: true }, (eventType, filename) => {
+        if (!filename) return;
+        const normalizedPath = filename.replace(/\\/g, '/');
+        this.handleWorkspaceFileChange(`${prefix}/${normalizedPath}`, eventType);
+        this.repeatRoutedChange(prefix, normalizedPath, eventType);
+      });
+      this.extraWatchers.set(prefix, { dir, watcher });
+      debug('[ConfigWatcher] Watching', dir, 'as', prefix);
+    } catch (error) {
+      debug('[ConfigWatcher] Error watching', dir, error);
+    }
+  }
+
+  private unwatchExtraDir(prefix: string): void {
+    this.extraWatchers.get(prefix)?.watcher.close();
+    this.extraWatchers.delete(prefix);
+  }
+
+  /**
+   * Repeat a change seen by the watcher `base` ('' = workspace watcher) under every
+   * prefix routed through it.
+   */
+  private repeatRoutedChange(base: string, path: string, eventType: string): void {
+    for (const [prefix, route] of this.routes) {
+      if (route.base !== base) continue;
+      if (!route.from) {
+        // Another link to the folder this watcher watches
+        this.handleWorkspaceFileChange(`${prefix}/${path}`, eventType);
+      } else if (path.startsWith(`${route.from}/`)) {
+        this.handleWorkspaceFileChange(prefix + path.slice(route.from.length), eventType);
+      }
+    }
+  }
+
+  /**
+   * Bring the extra watchers and routes in line with the folders on disk: the sources and
+   * skills folders unless they are the defaults in the workspace, plus every symlinked
+   * source/skill folder, whose contents fs.watch does not report through the link. Both
+   * kinds are placed together because one can sit inside a tree the other watches.
+   */
+  private syncExtraWatchers(): void {
+    const workspace = realpathOrSelf(this.workspaceDir);
+    const candidates: Array<{ prefix: string; target: string }> = [];
+
+    for (const [kind, dir] of [['sources', this.sourcesDir], ['skills', this.skillsDir]] as const) {
+      if (dir !== join(this.workspaceDir, kind) && existsSync(dir)) {
+        candidates.push({ prefix: kind, target: realpathOrSelf(dir) });
+      }
+      try {
+        for (const entry of readdirSync(dir, { withFileTypes: true })) {
+          if (!entry.isSymbolicLink()) continue;
+          try {
+            const target = realpathSync(join(dir, entry.name));
+            if (statSync(target).isDirectory()) candidates.push({ prefix: `${kind}/${entry.name}`, target });
+          } catch {
+            // Broken link
+          }
+        }
+      } catch {
+        // Folder missing or unreadable
+      }
+    }
+
+    // Shortest first, so a folder containing another is watched and the inner one routed
+    candidates.sort((a, b) => a.target.length - b.target.length);
+
+    const watches = new Map<string, string>(); // prefix -> directory to watch
+    const routes = new Map<string, { base: string; from: string }>();
+    for (const { prefix, target } of candidates) {
+      const bases: Array<[string, string]> = [['', workspace], ...watches];
+      const covering = bases.find(([, dir]) => isWithin(target, dir));
+      if (covering) {
+        const [base, dir] = covering;
+        const from = relative(dir, target).split(sep).join('/');
+        // The path the covering watcher already reports this folder under
+        const reported = base && from ? `${base}/${from}` : base || from;
+        // Skip a link to the workspace itself, and routes that would repeat `reported`
+        if (reported && reported !== prefix) routes.set(prefix, { base, from });
+      } else if (!isWithin(workspace, target)) {
+        // Never watch a folder that contains the workspace
+        watches.set(prefix, target);
+      }
+    }
+
+    this.routes = routes;
+    for (const [prefix, { dir }] of Array.from(this.extraWatchers)) {
+      if (watches.get(prefix) !== dir) this.unwatchExtraDir(prefix);
+    }
+    for (const [prefix, target] of watches) {
+      if (!this.extraWatchers.has(prefix)) this.watchExtraDir(prefix, target);
+    }
+  }
+
+  /** Exported for testing only: directories watched outside the workspace tree */
+  _getExtraWatchedDirs(): string[] {
+    return Array.from(this.extraWatchers.values(), ({ dir }) => dir);
+  }
+
+  /**
+   * Re-read the sources/skills folders from the workspace config and, for each one that
+   * moved, rescan it, re-point its watchers and broadcast its new list. Runs when the
+   * workspace config.json changes; SessionManager also calls it right after the setting
+   * is saved.
+   */
+  refreshDirectoryPaths(): void {
+    const newSourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
+    const newSkillsDir = getWorkspaceSkillsPath(this.workspaceDir);
+
+    if (newSourcesDir !== this.sourcesDir) {
+      debug('[ConfigWatcher] Sources directory changed:', this.sourcesDir, '->', newSourcesDir);
+      this.sourcesDir = newSourcesDir;
+      this.knownSources.clear();
+      this.scanSources();
+      this.syncExtraWatchers();
+      this.callbacks.onSourcesListChange?.(loadWorkspaceSources(this.workspaceDir));
+    }
+
+    if (newSkillsDir !== this.skillsDir) {
+      debug('[ConfigWatcher] Skills directory changed:', this.skillsDir, '->', newSkillsDir);
+      this.skillsDir = newSkillsDir;
+      this.knownSkills.clear();
+      this.scanSkills();
+      this.syncExtraWatchers();
+      invalidateSkillsCache();
+      this.callbacks.onSkillsListChange?.(loadAllSkills(this.workspaceDir));
+    }
+  }
+
   /**
    * Handle a file change within the workspace directory
    */
   private handleWorkspaceFileChange(relativePath: string, eventType: string): void {
     const parts = relativePath.split('/');
+
+    // Workspace-level config.json - may contain directory path changes
+    if (relativePath === 'config.json') {
+      this.debounce('workspace-config', () => this.refreshDirectoryPaths());
+      return;
+    }
 
     // Workspace-level permissions.json
     if (relativePath === 'permissions.json') {
@@ -456,6 +636,8 @@ export class ConfigWatcher {
         this.debounce(`source-guide:${slug}`, () => this.handleSourceGuideChange(slug));
       } else if (file === 'permissions.json') {
         this.debounce(`source-permissions:${slug}`, () => this.handleSourcePermissionsChange(slug));
+      } else if (file && /^icon\.(svg|png|jpg|jpeg)$/i.test(file)) {
+        this.debounce(`source-icon:${slug}`, () => this.handleSourceConfigChange(slug));
       }
       return;
     }
@@ -577,7 +759,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.sourcesDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           this.knownSources.add(entry);
         }
       }
@@ -604,6 +786,7 @@ export class ConfigWatcher {
       }
 
       this.callbacks.onSourcesListChange?.([]);
+      this.syncExtraWatchers();
       return;
     }
 
@@ -613,7 +796,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.sourcesDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           currentFolders.add(entry);
         }
       }
@@ -639,6 +822,9 @@ export class ConfigWatcher {
           this.callbacks.onSourceChange?.(folder, null);
         }
       }
+
+      // Symlinked folders may have been added or removed
+      this.syncExtraWatchers();
 
       // Notify list change
       const allSources = loadWorkspaceSources(this.workspaceDir);
@@ -734,7 +920,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.skillsDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           this.knownSkills.add(entry);
         }
       }
@@ -761,6 +947,7 @@ export class ConfigWatcher {
       }
 
       this.callbacks.onSkillsListChange?.([]);
+      this.syncExtraWatchers();
       return;
     }
 
@@ -770,7 +957,7 @@ export class ConfigWatcher {
 
       for (const entry of entries) {
         const entryPath = join(this.skillsDir, entry);
-        if (statSync(entryPath).isDirectory()) {
+        if (isDirectorySafe(entryPath)) {
           currentFolders.add(entry);
         }
       }
@@ -796,6 +983,9 @@ export class ConfigWatcher {
           this.callbacks.onSkillChange?.(folder, null);
         }
       }
+
+      // Symlinked folders may have been added or removed
+      this.syncExtraWatchers();
 
       // Invalidate cache before reloading so we get fresh results
       invalidateSkillsCache();

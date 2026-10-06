@@ -15,6 +15,7 @@ import bashParser from 'bash-parser';
 import { existsSync } from 'node:fs';
 import { basename, isAbsolute, resolve, join } from 'node:path';
 import { expandPath } from './path-processor.ts';
+import { getWorkspaceSourcesPath } from '../../workspaces/storage.ts';
 import { getBrowserToolEnabled } from '../../config/storage.ts';
 import { CONFIG_DIR } from '../../config/paths.ts';
 
@@ -76,7 +77,8 @@ const RULES: PrerequisiteRule[] = [
     resolveRequiredPath: (toolName: string, workspaceRootPath: string) => {
       const parts = toolName.split('__');
       const slug = parts[1]!;
-      const guidePath = resolve(workspaceRootPath, 'sources', slug, 'guide.md');
+      const sourcesDir = getWorkspaceSourcesPath(workspaceRootPath);
+      const guidePath = resolve(sourcesDir, slug, 'guide.md');
       return existsSync(guidePath) ? guidePath : null;
     },
     blockMessage:
@@ -90,7 +92,8 @@ const RULES: PrerequisiteRule[] = [
     },
     resolveRequiredPath: (toolName: string, workspaceRootPath: string) => {
       const slug = toolName.slice(4); // Remove 'api_' prefix
-      const guidePath = resolve(workspaceRootPath, 'sources', slug, 'guide.md');
+      const sourcesDir = getWorkspaceSourcesPath(workspaceRootPath);
+      const guidePath = resolve(sourcesDir, slug, 'guide.md');
       return existsSync(guidePath) ? guidePath : null;
     },
     blockMessage:

@@ -99,7 +99,7 @@ export async function handleConfigValidate(
         return successResponse(formatValidationResult(result));
       } else {
         // Validate all sources
-        const sourcesDir = join(ctx.workspacePath, 'sources');
+        const sourcesDir = ctx.sourcesPath;
         if (!ctx.fs.exists(sourcesDir)) {
           return successResponse('✓ No sources directory (no sources to validate)');
         }

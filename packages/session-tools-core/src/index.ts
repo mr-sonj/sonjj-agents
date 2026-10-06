@@ -82,6 +82,13 @@ export {
   getEffectiveHeaderNames,
 } from './source-helpers.ts';
 
+// Workspace skills/sources directories (custom paths from the workspace config)
+export {
+  resolveSourcesDir,
+  resolveSkillsDir,
+  expandWorkspaceDirPath,
+} from './workspace-dirs.ts';
+
 // API credential parsing and request-auth assembly (shared with @craft-agent/shared)
 export {
   isBasicAuthCredential,

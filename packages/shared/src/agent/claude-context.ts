@@ -63,6 +63,7 @@ import { isGoogleOAuthConfigured as isGoogleOAuthConfiguredImpl } from '../auth/
 import { debug } from '../utils/debug.ts';
 import { getSessionPlansPath, getSessionPath, getSessionDataPath } from '../sessions/storage.ts';
 import { updatePreferences as updatePreferencesImpl } from '../config/preferences.ts';
+import { getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
 
 // Re-export types that may be needed by consumers
 export type { SessionToolContext, SessionToolCallbacks } from '@craft-agent/session-tools-core';
@@ -215,8 +216,8 @@ export function createClaudeContext(options: ClaudeContextOptions): SessionToolC
   const context: SessionToolContext = {
     sessionId,
     workspacePath,
-    get sourcesPath() { return join(workspacePath, 'sources'); },
-    get skillsPath() { return join(workspacePath, 'skills'); },
+    get sourcesPath() { return getWorkspaceSourcesPath(workspacePath); },
+    get skillsPath() { return getWorkspaceSkillsPath(workspacePath); },
     plansFolderPath: getSessionPlansPath(workspacePath, sessionId),
     sessionPath: getSessionPath(workspacePath, sessionId),
     dataPath: getSessionDataPath(workspacePath, sessionId),

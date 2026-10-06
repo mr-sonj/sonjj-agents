@@ -57,6 +57,10 @@ export interface WorkspaceConfig {
     workingDirectory?: string;
     thinkingLevel?: ThinkingLevel; // Default thinking level for new sessions (default: 'medium')
     codingMode?: boolean; // Start new sessions in coding mode (default: off)
+    /** Custom directory path for skills. Undefined = uses {workspaceRoot}/skills/ */
+    skillsDirectory?: string;
+    /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/ */
+    sourcesDirectory?: string;
     colorTheme?: string; // Color theme override for this workspace (preset ID). Undefined = inherit from app default.
   };
 
