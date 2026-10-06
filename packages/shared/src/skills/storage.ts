@@ -110,7 +110,7 @@ function loadSkillFromDir(skillsDir: string, slug: string, source: SkillSource):
   const skillFile = join(skillDir, 'SKILL.md');
 
   // Check directory exists
-  if (!existsSync(skillDir) || !isDirectorySafe(skillDir)) {
+  if (!isDirectorySafe(skillDir)) {
     return null;
   }
 
