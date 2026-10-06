@@ -329,6 +329,26 @@ describe('validateExtraSkillDirs', () => {
     }
   })
 
+  it('keeps the first of two entries that name the same folder', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dirs-'))
+    try {
+      mkdirSync(join(base, 'a'))
+      expect(validateExtraSkillDirs(['a', join(base, 'a'), `${join(base, 'a')}/`, './a/'], base)).toEqual({ valid: true, dirs: ['a'] })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('takes an entry written another way as the saved one', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dirs-'))
+    try {
+      const gone = join(base, 'gone')
+      expect(validateExtraSkillDirs(['gone/'], base, [gone])).toEqual({ valid: true, dirs: ['gone/'] })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
   it('returns no list when nothing is left', () => {
     expect(validateExtraSkillDirs([' '], '/tmp')).toEqual({ valid: true, dirs: undefined })
     expect(validateExtraSkillDirs(undefined, '/tmp')).toEqual({ valid: true, dirs: undefined })

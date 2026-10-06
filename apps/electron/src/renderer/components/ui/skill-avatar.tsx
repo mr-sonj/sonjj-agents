@@ -7,7 +7,7 @@
 
 import { Zap } from 'lucide-react'
 import { EntityIcon } from '@/components/ui/entity-icon'
-import { useEntityIcon } from '@/lib/icon-cache'
+import { skillIconRequestPath, useEntityIcon } from '@/lib/icon-cache'
 import type { IconSize } from '@craft-agent/shared/icons'
 import type { LoadedSkill } from '../../../shared/types'
 
@@ -29,7 +29,7 @@ export function SkillAvatar({ skill, size = 'md', fluid, className, workspaceId 
     workspaceId: workspaceId ?? '',
     entityType: 'skill',
     identifier: skill.slug,
-    iconPath: skill.iconPath,
+    iconPath: skill.iconPath && skillIconRequestPath(skill.slug, skill.iconPath),
     iconValue: skill.metadata.icon,
   })
 
