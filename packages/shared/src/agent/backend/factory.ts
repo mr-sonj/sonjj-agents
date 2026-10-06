@@ -44,6 +44,7 @@ import { homedir } from 'node:os';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { getCredentialManager } from '../../credentials/index.ts';
+import { getWorkspaceSourcesPath } from '../../workspaces/storage.ts';
 import type {
   BackendModelFetchCredentials,
   BackendProviderOptions,
@@ -674,7 +675,7 @@ export async function cleanupSourceRuntimeArtifacts(
   disabledSourceSlugs: string[],
 ): Promise<void> {
   for (const sourceSlug of disabledSourceSlugs) {
-    const cachePath = join(workspaceRootPath, 'sources', sourceSlug, '.credential-cache.json');
+    const cachePath = join(getWorkspaceSourcesPath(workspaceRootPath), sourceSlug, '.credential-cache.json');
     await rm(cachePath, { force: true });
   }
 }
