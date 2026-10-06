@@ -24,6 +24,7 @@ import {
   skillExists,
   listSkillSlugs,
   deleteSkill,
+  loadSkillBySlug,
 } from '../storage.ts';
 
 // ============================================================
@@ -618,5 +619,80 @@ describe('deleteSkill', () => {
   it('should return false for non-existent skill', () => {
     const result = deleteSkill(workspaceRoot, 'nonexistent');
     expect(result).toBe(false);
+  });
+});
+
+// ============================================================
+// Tests: extra skill folders (extraSkillDirs)
+// ============================================================
+
+describe('extra skill folders', () => {
+  const PREFIX = '_test_extra_';
+
+  /** Point the workspace's extraSkillDirs at the given folders */
+  function setExtraSkillDirs(dirs: string[]): void {
+    writeFileSync(join(workspaceRoot, 'config.json'), JSON.stringify({ defaults: { extraSkillDirs: dirs } }));
+  }
+
+  it('loads skills from every listed folder with source "extra"', () => {
+    createSkill(join(tempDir, 'repos', 'a', '.agents', 'skills'), `${PREFIX}a`);
+    createSkill(join(tempDir, 'repos', 'b', '.agents', 'skills'), `${PREFIX}b`);
+    setExtraSkillDirs([join(tempDir, 'repos', 'a', '.agents', 'skills'), join(tempDir, 'repos', 'b', '.agents', 'skills')]);
+
+    const skills = loadAllSkills(workspaceRoot).filter(s => s.slug.startsWith(PREFIX));
+
+    expect(skills.map(s => [s.slug, s.source])).toEqual([
+      [`${PREFIX}a`, 'extra'],
+      [`${PREFIX}b`, 'extra'],
+    ]);
+  });
+
+  it('lets the first listed folder win a slug', () => {
+    const first = join(tempDir, 'first');
+    const second = join(tempDir, 'second');
+    createSkill(first, `${PREFIX}dup`, { name: 'From first' });
+    createSkill(second, `${PREFIX}dup`, { name: 'From second' });
+    setExtraSkillDirs([first, second]);
+
+    expect(loadAllSkills(workspaceRoot).find(s => s.slug === `${PREFIX}dup`)?.metadata.name).toBe('From first');
+    expect(loadSkillBySlug(workspaceRoot, `${PREFIX}dup`)?.metadata.name).toBe('From first');
+  });
+
+  it('uses a later folder when the first one holds the slug without a valid SKILL.md', () => {
+    const first = join(tempDir, 'first');
+    const second = join(tempDir, 'second');
+    mkdirSync(join(first, `${PREFIX}dup`), { recursive: true });
+    writeFileSync(join(first, `${PREFIX}dup`, 'SKILL.md'), 'no frontmatter');
+    createSkill(second, `${PREFIX}dup`, { name: 'From second' });
+    setExtraSkillDirs([first, second]);
+
+    expect(loadAllSkills(workspaceRoot).find(s => s.slug === `${PREFIX}dup`)?.metadata.name).toBe('From second');
+    expect(loadSkillBySlug(workspaceRoot, `${PREFIX}dup`)?.metadata.name).toBe('From second');
+  });
+
+  it('ranks below workspace and project skills', () => {
+    const extra = join(tempDir, 'extra');
+    createSkill(extra, `${PREFIX}ws`, { name: 'Extra' });
+    createSkill(extra, `${PREFIX}proj`, { name: 'Extra' });
+    createSkill(join(workspaceRoot, 'skills'), `${PREFIX}ws`, { name: 'Workspace' });
+    createSkill(join(projectRoot, '.agents', 'skills'), `${PREFIX}proj`, { name: 'Project' });
+    setExtraSkillDirs([extra]);
+
+    const skills = loadAllSkills(workspaceRoot, projectRoot);
+    expect(skills.find(s => s.slug === `${PREFIX}ws`)?.source).toBe('workspace');
+    expect(skills.find(s => s.slug === `${PREFIX}proj`)?.source).toBe('project');
+
+    expect(loadSkillBySlug(workspaceRoot, `${PREFIX}ws`, projectRoot)?.source).toBe('workspace');
+    expect(loadSkillBySlug(workspaceRoot, `${PREFIX}proj`, projectRoot)?.source).toBe('project');
+  });
+
+  it('finds an extra skill by slug', () => {
+    const extra = join(tempDir, 'extra');
+    createSkill(extra, `${PREFIX}only`);
+    setExtraSkillDirs([extra]);
+
+    const skill = loadSkillBySlug(workspaceRoot, `${PREFIX}only`);
+    expect(skill?.source).toBe('extra');
+    expect(skill?.path).toBe(join(extra, `${PREFIX}only`));
   });
 });

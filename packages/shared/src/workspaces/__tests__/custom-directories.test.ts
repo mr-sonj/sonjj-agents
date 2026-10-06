@@ -6,9 +6,10 @@ import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
-import { resolveSkillsDir, resolveSourcesDir } from '@craft-agent/session-tools-core';
+import { resolveExtraSkillDirs, resolveSkillsDir, resolveSourcesDir } from '@craft-agent/session-tools-core';
 import {
   createWorkspaceAtPath,
+  getWorkspaceExtraSkillsPaths,
   getWorkspaceSkillsPath,
   getWorkspaceSourcesPath,
   loadWorkspaceConfig,
@@ -87,5 +88,86 @@ describe('custom skills/sources directories', () => {
       expect(resolveSkillsDir(wsRoot)).toBe(getWorkspaceSkillsPath(wsRoot));
       expect(resolveSourcesDir(wsRoot)).toBe(getWorkspaceSourcesPath(wsRoot));
     });
+  });
+});
+
+describe('extra skill directories', () => {
+  /** Create folders (relative to tempDir) and return their absolute paths */
+  function makeDirs<T extends string[]>(...paths: T): { [K in keyof T]: string } {
+    return paths.map(path => {
+      const dir = join(tempDir, path);
+      mkdirSync(dir, { recursive: true });
+      return dir;
+    }) as { [K in keyof T]: string };
+  }
+
+  it('is empty when unset or not a list', () => {
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([]);
+
+    writeDefaults({ extraSkillDirs: join(tempDir, 'not-a-list') });
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([]);
+  });
+
+  it('keeps the listed order and skips folders that do not exist', () => {
+    const [b, a] = makeDirs('b', 'a');
+    writeDefaults({ extraSkillDirs: [b, join(tempDir, 'missing'), a, 42, '  '] });
+
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([b, a]);
+  });
+
+  it('takes * and ? as part of a folder name, not as wildcards', () => {
+    makeDirs('projects/alpha/skills');
+    const [literal] = makeDirs('literal/*');
+    writeDefaults({ extraSkillDirs: [join(tempDir, 'projects/*/skills'), join(tempDir, 'projects/alph?/skills'), literal] });
+
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([literal]);
+  });
+
+  it('resolves a relative path from the workspace root', () => {
+    const [inside] = makeDirs('workspace/team-skills');
+    writeDefaults({ extraSkillDirs: ['team-skills'] });
+
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([inside]);
+  });
+
+  it('lists a folder once when it is listed twice', () => {
+    const [one, two] = makeDirs('p/one', 'p/two');
+    writeDefaults({ extraSkillDirs: [two, one, two] });
+
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([two, one]);
+  });
+
+  it('sees a folder created after the config was read', () => {
+    writeDefaults({ extraSkillDirs: [join(tempDir, 'later')] });
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([]);
+
+    const [created] = makeDirs('later');
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([created]);
+  });
+
+  it('matches session-tools-core', () => {
+    const [one, two] = makeDirs('x/one', 'x/two');
+    writeDefaults({ extraSkillDirs: [one, 'missing', two] });
+
+    expect(resolveExtraSkillDirs(root)).toEqual(getWorkspaceExtraSkillsPaths(root));
+  });
+
+  it('saves the config untouched when extraSkillDirs was hand-edited to a non-list', () => {
+    writeDefaults({ extraSkillDirs: 'team-skills' });
+    const config = loadWorkspaceConfig(root)!;
+
+    saveWorkspaceConfig(root, { ...config, name: 'Renamed' });
+    expect(JSON.parse(readFileSync(join(root, 'config.json'), 'utf-8')).defaults.extraSkillDirs).toBe('team-skills');
+  });
+
+  it('stores each entry in portable form', () => {
+    const config = loadWorkspaceConfig(root)!;
+    saveWorkspaceConfig(root, {
+      ...config,
+      defaults: { ...config.defaults, extraSkillDirs: [join(homedir(), 'code/team-skills'), 'rel'] },
+    });
+
+    expect(JSON.parse(readFileSync(join(root, 'config.json'), 'utf-8')).defaults.extraSkillDirs)
+      .toEqual(['~/code/team-skills', 'rel']);
   });
 });

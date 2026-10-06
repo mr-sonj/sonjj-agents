@@ -16,7 +16,7 @@ import { homedir } from 'os';
 import { join } from 'path';
 import matter from 'gray-matter';
 import type { LoadedSkill, SkillMetadata, SkillSource } from './types.ts';
-import { getWorkspaceSkillsPath } from '../workspaces/storage.ts';
+import { getWorkspaceExtraSkillsPaths, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
 import {
   validateIconValue,
   findIconFile,
@@ -146,8 +146,9 @@ function loadSkillFromDir(skillsDir: string, slug: string, source: SkillSource):
  * Load all skills from a directory
  * @param skillsDir - Absolute path to skills directory
  * @param source - Where these skills are loaded from
+ * @param skipSlugs - Slugs already loaded elsewhere; their folders are not read
  */
-function loadSkillsFromDir(skillsDir: string, source: SkillSource): LoadedSkill[] {
+function loadSkillsFromDir(skillsDir: string, source: SkillSource, skipSlugs?: ReadonlySet<string>): LoadedSkill[] {
   if (!existsSync(skillsDir)) {
     return [];
   }
@@ -157,7 +158,7 @@ function loadSkillsFromDir(skillsDir: string, source: SkillSource): LoadedSkill[
   try {
     const entries = readdirSync(skillsDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!isDirectoryEntry(skillsDir, entry)) continue;
+      if (skipSlugs?.has(entry.name) || !isDirectoryEntry(skillsDir, entry)) continue;
 
       const skill = loadSkillFromDir(skillsDir, entry.name, source);
       if (skill) {
@@ -191,7 +192,7 @@ export function loadWorkspaceSkills(workspaceRoot: string): LoadedSkill[] {
 }
 
 // ── Skills cache ────────────────────────────────────────────────────────
-// loadAllSkills reads from up to 3 directories on every call (~100ms).
+// loadAllSkills reads from 3 directories plus any extra ones on every call (~100ms).
 // The result rarely changes during a session, so we cache it per
 // (workspaceRoot, projectRoot) pair with a 5-minute safety TTL.
 
@@ -204,9 +205,10 @@ export function invalidateSkillsCache(): void {
 }
 
 /**
- * Load all skills from all sources (global, workspace, project)
+ * Load all skills from all sources (global, extra, workspace, project)
  * Skills with the same slug are overridden by higher-priority sources.
- * Priority: global (lowest) < workspace < project (highest)
+ * Priority: global (lowest) < extra < workspace < project (highest).
+ * Among the extra folders (`extraSkillDirs`), the first one listed wins.
  *
  * Results are cached per (workspaceRoot, projectRoot) pair. Call
  * invalidateSkillsCache() on working directory changes or skill file events.
@@ -229,12 +231,21 @@ export function loadAllSkills(workspaceRoot: string, projectRoot?: string): Load
     skillsBySlug.set(skill.slug, skill);
   }
 
-  // 2. Workspace skills (medium priority)
+  // 2. Extra skill folders: the first folder listed wins a slug, so later copies are not read
+  const extraSlugs = new Set<string>();
+  for (const dir of getWorkspaceExtraSkillsPaths(workspaceRoot)) {
+    for (const skill of loadSkillsFromDir(dir, 'extra', extraSlugs)) {
+      extraSlugs.add(skill.slug);
+      skillsBySlug.set(skill.slug, skill);
+    }
+  }
+
+  // 3. Workspace skills
   for (const skill of loadWorkspaceSkills(workspaceRoot)) {
     skillsBySlug.set(skill.slug, skill);
   }
 
-  // 3. Project skills (highest priority): {projectRoot}/.agents/skills/
+  // 4. Project skills (highest priority): {projectRoot}/.agents/skills/
   if (projectRoot) {
     const projectSkillsDir = join(projectRoot, PROJECT_AGENT_SKILLS_DIR);
     for (const skill of loadSkillsFromDir(projectSkillsDir, 'project')) {
@@ -248,7 +259,7 @@ export function loadAllSkills(workspaceRoot: string, projectRoot?: string): Load
 }
 
 /**
- * Load a single skill by slug from all sources (project > workspace > global).
+ * Load a single skill by slug from all sources (project > workspace > extra > global).
  * Unlike loadAllSkills(), this only reads the specific slug directory — O(1) not O(N).
  *
  * @param workspaceRoot - Absolute path to workspace root
@@ -263,9 +274,15 @@ export function loadSkillBySlug(workspaceRoot: string, slug: string, projectRoot
     if (skill) return skill;
   }
 
-  // Medium priority: workspace
+  // Then workspace
   const workspaceSkill = loadSkillFromDir(getWorkspaceSkillsPath(workspaceRoot), slug, 'workspace');
   if (workspaceSkill) return workspaceSkill;
+
+  // Then the extra folders, in the order listed
+  for (const dir of getWorkspaceExtraSkillsPaths(workspaceRoot)) {
+    const extraSkill = loadSkillFromDir(dir, slug, 'extra');
+    if (extraSkill) return extraSkill;
+  }
 
   // Lowest priority: global
   return loadSkillFromDir(GLOBAL_AGENT_SKILLS_DIR, slug, 'global');

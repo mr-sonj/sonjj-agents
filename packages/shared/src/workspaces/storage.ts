@@ -21,7 +21,12 @@ import { homedir } from 'os';
 import { randomUUID } from 'crypto';
 import { expandPath, toPortablePath } from '../utils/paths.ts';
 import { atomicWriteFileSync, readJsonFileSync } from '../utils/files.ts';
-import { resolveSkillsDir, resolveSourcesDir } from '@craft-agent/session-tools-core/workspace-dirs';
+import {
+  expandWorkspaceDirPath,
+  resolveExtraSkillDirs,
+  resolveSkillsDir,
+  resolveSourcesDir,
+} from '@craft-agent/session-tools-core/workspace-dirs';
 import { CONFIG_DIR, DEFAULT_CONFIG_DIR_NAME } from '../config/paths.ts';
 import { getDefaultStatusConfig, saveStatusConfig, ensureDefaultIconFiles } from '../statuses/storage.ts';
 import { getDefaultLabelConfig, saveLabelConfig } from '../labels/storage.ts';
@@ -108,6 +113,25 @@ export function getWorkspaceSkillsPath(rootPath: string): string {
   return resolveSkillsDir(rootPath);
 }
 
+/**
+ * Get the extra folders the workspace loads skills from (`extraSkillDirs` in its config),
+ * in the order listed, with missing folders left out.
+ * @param rootPath - Absolute path to workspace root folder
+ */
+export function getWorkspaceExtraSkillsPaths(rootPath: string): string[] {
+  return resolveExtraSkillDirs(rootPath);
+}
+
+/**
+ * Get the folder one `extraSkillDirs` entry points at (`~` expanded, a relative entry
+ * resolved from the workspace root), whether or not it exists.
+ * @param rootPath - Absolute path to workspace root folder
+ * @param entry - The entry as written in the config
+ */
+export function getExtraSkillsPath(rootPath: string, entry: string): string {
+  return expandWorkspaceDirPath(entry, rootPath);
+}
+
 // ============================================================
 // Config Operations
 // ============================================================
@@ -187,6 +211,13 @@ export function saveWorkspaceConfig(rootPath: string, config: WorkspaceConfig): 
     storageConfig.defaults = {
       ...storageConfig.defaults,
       sourcesDirectory: toPortablePath(storageConfig.defaults.sourcesDirectory),
+    };
+  }
+  // A hand-edited config may hold anything here; only a list of paths is rewritten
+  if (Array.isArray(storageConfig.defaults?.extraSkillDirs)) {
+    storageConfig.defaults = {
+      ...storageConfig.defaults,
+      extraSkillDirs: storageConfig.defaults.extraSkillDirs.map(dir => (typeof dir === 'string' ? toPortablePath(dir) : dir)),
     };
   }
 
