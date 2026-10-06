@@ -51,6 +51,7 @@ import { permissionsConfigCache, type PermissionsContext } from '../permissions-
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { getBashRememberKey, getFileWriteRememberKey, getNetworkCommandHosts, type PermissionRemember } from './permission-remember.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
+import { getWorkspaceSkillsPath } from '../../workspaces/storage.ts';
 
 // ============================================================
 // TYPES
@@ -270,8 +271,8 @@ function resolveSkillPlugin(
     return `${AGENTS_PLUGIN_NAME}:${bareSlug}`;
   }
 
-  // 2. Workspace: {workspaceRoot}/skills/{slug}/SKILL.md
-  if (existsSync(join(workspaceRootPath, 'skills', bareSlug, 'SKILL.md'))) {
+  // 2. Workspace: {workspaceRoot}/skills/{slug}/SKILL.md, or the custom skillsDirectory
+  if (existsSync(join(getWorkspaceSkillsPath(workspaceRootPath), bareSlug, 'SKILL.md'))) {
     return `${workspaceSlug}:${bareSlug}`;
   }
 

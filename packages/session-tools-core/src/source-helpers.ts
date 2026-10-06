@@ -9,6 +9,7 @@
 import { existsSync, readFileSync, readdirSync, statSync, openSync, readSync, closeSync } from 'node:fs';
 import { join } from 'node:path';
 import type { SourceConfig } from './types.ts';
+import { resolveSkillsDir, resolveSourcesDir } from './workspace-dirs.ts';
 
 /** Strip UTF-8 BOM that breaks JSON.parse */
 function stripBom(text: string): string {
@@ -19,7 +20,7 @@ function stripBom(text: string): string {
  * Get the path to a source's directory
  */
 export function getSourcePath(workspaceRootPath: string, sourceSlug: string): string {
-  return join(workspaceRootPath, 'sources', sourceSlug);
+  return join(resolveSourcesDir(workspaceRootPath), sourceSlug);
 }
 
 /**
@@ -73,11 +74,19 @@ export function loadSourceConfig(
   }
 }
 
+function isDirectorySafe(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
 /**
  * List all source slugs in a workspace
  */
 export function listSourceSlugs(workspaceRootPath: string): string[] {
-  const sourcesDir = join(workspaceRootPath, 'sources');
+  const sourcesDir = resolveSourcesDir(workspaceRootPath);
 
   if (!existsSync(sourcesDir)) {
     return [];
@@ -87,7 +96,7 @@ export function listSourceSlugs(workspaceRootPath: string): string[] {
     const entries = readdirSync(sourcesDir);
     return entries.filter((entry) => {
       const entryPath = join(sourcesDir, entry);
-      return statSync(entryPath).isDirectory();
+      return isDirectorySafe(entryPath);
     });
   } catch {
     return [];
@@ -98,7 +107,7 @@ export function listSourceSlugs(workspaceRootPath: string): string[] {
  * Get the path to a skill's directory
  */
 export function getSkillPath(workspaceRootPath: string, skillSlug: string): string {
-  return join(workspaceRootPath, 'skills', skillSlug);
+  return join(resolveSkillsDir(workspaceRootPath), skillSlug);
 }
 
 /**
@@ -126,7 +135,7 @@ export function skillMdExists(workspaceRootPath: string, skillSlug: string): boo
  * List all skill slugs in a workspace
  */
 export function listSkillSlugs(workspaceRootPath: string): string[] {
-  const skillsDir = join(workspaceRootPath, 'skills');
+  const skillsDir = resolveSkillsDir(workspaceRootPath);
 
   if (!existsSync(skillsDir)) {
     return [];
@@ -136,7 +145,7 @@ export function listSkillSlugs(workspaceRootPath: string): string[] {
     const entries = readdirSync(skillsDir);
     return entries.filter((entry) => {
       const entryPath = join(skillsDir, entry);
-      return statSync(entryPath).isDirectory();
+      return isDirectorySafe(entryPath);
     });
   } catch {
     return [];

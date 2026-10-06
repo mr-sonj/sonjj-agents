@@ -819,6 +819,10 @@ export interface WorkspaceSettings {
   /** Start new sessions in coding mode */
   codingMode?: boolean
   workingDirectory?: string
+  /** Custom directory path for skills. Undefined = uses {workspaceRoot}/skills/. */
+  skillsDirectory?: string
+  /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/. */
+  sourcesDirectory?: string
   localMcpEnabled?: boolean
   defaultLlmConnection?: string
   enabledSourceSlugs?: string[]

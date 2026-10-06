@@ -24,6 +24,7 @@ import {
   needsIconDownload,
   isIconUrl,
 } from '../utils/icon.ts';
+import { isDirectorySafe, isDirectoryEntry } from '../utils/files.ts';
 
 // ============================================================
 // Agent Skills Paths (Issue #171)
@@ -109,7 +110,7 @@ function loadSkillFromDir(skillsDir: string, slug: string, source: SkillSource):
   const skillFile = join(skillDir, 'SKILL.md');
 
   // Check directory exists
-  if (!existsSync(skillDir) || !statSync(skillDir).isDirectory()) {
+  if (!existsSync(skillDir) || !isDirectorySafe(skillDir)) {
     return null;
   }
 
@@ -156,7 +157,7 @@ function loadSkillsFromDir(skillsDir: string, source: SkillSource): LoadedSkill[
   try {
     const entries = readdirSync(skillsDir, { withFileTypes: true });
     for (const entry of entries) {
-      if (!entry.isDirectory()) continue;
+      if (!isDirectoryEntry(skillsDir, entry)) continue;
 
       const skill = loadSkillFromDir(skillsDir, entry.name, source);
       if (skill) {
@@ -342,7 +343,7 @@ export function listSkillSlugs(workspaceRoot: string): string[] {
   try {
     return readdirSync(skillsDir, { withFileTypes: true })
       .filter((entry) => {
-        if (!entry.isDirectory()) return false;
+        if (!isDirectoryEntry(skillsDir, entry)) return false;
         const skillFile = join(skillsDir, entry.name, 'SKILL.md');
         return existsSync(skillFile);
       })
