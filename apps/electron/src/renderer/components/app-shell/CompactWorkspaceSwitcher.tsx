@@ -208,14 +208,6 @@ export function CompactWorkspaceSwitcher({
               const disconnected = isRemoteDisconnected(workspace.id)
               const isActive = activeWorkspaceId === workspace.id
               const handleSelect = () => {
-                if (disconnected && workspace.remoteServer) {
-                  setReconnectTarget(workspace)
-                  setShowCreationScreen(true)
-                  setFullscreenOverlayOpen(true)
-                  setOpen(false)
-                  return
-                }
-                if (disconnected) return
                 onSelect(workspace.id)
                 setOpen(false)
               }
@@ -248,7 +240,22 @@ export function CompactWorkspaceSwitcher({
                       {workspace.remoteServer && (
                         <div className="flex items-center gap-1 text-xs text-foreground/50 mt-0.5">
                           {disconnected
-                            ? <><CloudOff className="h-3 w-3 text-destructive shrink-0" /><span title={getDisconnectTooltip(workspace.id)}>{t('toast.disconnected')}</span></>
+                            ? (
+                              <button
+                                type="button"
+                                className="flex items-center gap-1 hover:text-destructive transition-colors text-left"
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setReconnectTarget(workspace)
+                                  setShowCreationScreen(true)
+                                  setFullscreenOverlayOpen(true)
+                                  setOpen(false)
+                                }}
+                              >
+                                <CloudOff className="h-3 w-3 text-destructive shrink-0" />
+                                <span title={getDisconnectTooltip(workspace.id)}>{t('toast.disconnected')}</span>
+                              </button>
+                            )
                             : <><Cloud className="h-3 w-3 shrink-0" /><span className="truncate">{workspace.remoteServer.url}</span></>
                           }
                         </div>

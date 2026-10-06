@@ -254,13 +254,6 @@ export function WorkspaceSwitcher({
               <StyledDropdownMenuItem
                 key={workspace.id}
                 onClick={(e) => {
-                  if (disconnected && workspace.remoteServer) {
-                    setReconnectTarget(workspace)
-                    setShowCreationScreen(true)
-                    setFullscreenOverlayOpen(true)
-                    return
-                  }
-                  if (disconnected) return
                   const openInNewWindow = e.metaKey || e.ctrlKey
                   onSelect(workspace.id, openInNewWindow)
                 }}
@@ -281,7 +274,21 @@ export function WorkspaceSwitcher({
                   <span className="truncate">{workspace.name}</span>
                   {workspace.remoteServer && (
                     disconnected
-                      ? <span title={getDisconnectTooltip(workspace.id)} className="shrink-0"><CloudOff className="h-3.5 w-3.5 text-destructive" /></span>
+                      ? (
+                        <button
+                          type="button"
+                          title={getDisconnectTooltip(workspace.id)}
+                          className="shrink-0 p-0.5 rounded hover:bg-destructive/20 transition-colors"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            setReconnectTarget(workspace)
+                            setShowCreationScreen(true)
+                            setFullscreenOverlayOpen(true)
+                          }}
+                        >
+                          <CloudOff className="h-3.5 w-3.5 text-destructive" />
+                        </button>
+                      )
                       : <Cloud className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                   )}
                   {workspaceUnreadMap?.[workspace.id] && <span className="h-2 w-2 rounded-full bg-accent shrink-0" />}

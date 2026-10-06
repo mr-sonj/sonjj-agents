@@ -264,6 +264,16 @@ client.onConnectionStateChanged((state) => {
   client.reconnectNow()
 }
 
+ipcRenderer.on('__transport:system-resume', () => {
+  console.info('[preload] System resumed/unlocked — reconnecting transport')
+  client.reconnectNow()
+})
+
+window.addEventListener('online', () => {
+  console.info('[preload] Network came online — reconnecting transport')
+  client.reconnectNow()
+})
+
 // ── performOAuth ─────────────────────────────────────────────────────────
 // Multi-step orchestration: callback server (local) → oauth:start (server) →
 // open browser → wait for callback → oauth:complete (server).
