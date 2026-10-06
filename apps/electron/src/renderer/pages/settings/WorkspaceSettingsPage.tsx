@@ -7,6 +7,7 @@
  * - Identity (Name, Icon)
  * - Permissions (Default mode, Mode cycling)
  * - Advanced (Working directory, custom directories, Local MCP servers)
+ * - Extra skill folders
  *
  * Note: AI settings (model, thinking, connection) have been moved to AiSettingsPage.
  */
@@ -31,6 +32,7 @@ import { PERMISSION_MODE_CONFIG, PERMISSION_MODE_ORDER } from '@craft-agent/shar
 import type { DetailsPageMeta } from '@/lib/navigation-registry'
 import { SourceAvatar } from '@/components/ui/source-avatar'
 import { toast } from 'sonner'
+import { ExtraSkillFolders } from './ExtraSkillFolders'
 
 import {
   SettingsSection,
@@ -67,6 +69,7 @@ export default function WorkspaceSettingsPage() {
   const [workingDirectory, setWorkingDirectory] = useState('')
   const [skillsDirectory, setSkillsDirectory] = useState('')
   const [sourcesDirectory, setSourcesDirectory] = useState('')
+  const [extraSkillDirs, setExtraSkillDirs] = useState<string[]>([])
   const [localMcpEnabled, setLocalMcpEnabled] = useState(true)
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true)
 
@@ -99,6 +102,7 @@ export default function WorkspaceSettingsPage() {
           setWorkingDirectory(settings.workingDirectory || '')
           setSkillsDirectory(settings.skillsDirectory || '')
           setSourcesDirectory(settings.sourcesDirectory || '')
+          setExtraSkillDirs(settings.extraSkillDirs ?? [])
           setLocalMcpEnabled(settings.localMcpEnabled ?? true)
           // Load cyclable permission modes from workspace settings
           if (settings.cyclablePermissionModes && settings.cyclablePermissionModes.length >= 2) {
@@ -329,6 +333,13 @@ export default function WorkspaceSettingsPage() {
       setSourcesDirectory('')
     }
   }, [updateWorkspaceSetting])
+
+  // The server cleans up the list, so read back what it saved
+  const handleSaveExtraSkillDirs = useCallback(async (dirs: string[]) => {
+    if (!activeWorkspaceId || !(await updateWorkspaceSetting('extraSkillDirs', dirs))) return
+    const settings = await window.electronAPI.getWorkspaceSettings(activeWorkspaceId)
+    setExtraSkillDirs(settings?.extraSkillDirs ?? [])
+  }, [activeWorkspaceId, updateWorkspaceSetting])
 
   const handleLocalMcpEnabledChange = useCallback(
     async (enabled: boolean) => {
@@ -654,6 +665,15 @@ export default function WorkspaceSettingsPage() {
                   onCheckedChange={handleLocalMcpEnabledChange}
                 />
               </SettingsCard>
+            </SettingsSection>
+
+            {/* Extra skill folders */}
+            <SettingsSection
+              title={t('settings.workspace.extraSkillFolders')}
+              description={t('settings.workspace.extraSkillFoldersDesc')}
+            >
+              {/* Keyed so unsaved rows do not carry over to another workspace */}
+              <ExtraSkillFolders key={activeWorkspaceId} dirs={extraSkillDirs} onSave={handleSaveExtraSkillDirs} />
             </SettingsSection>
 
           </div>

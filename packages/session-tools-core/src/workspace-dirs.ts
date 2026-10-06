@@ -2,10 +2,11 @@
  * Workspace skills/sources directories.
  *
  * A workspace can move its skills or sources folder with `defaults.skillsDirectory` /
- * `defaults.sourcesDirectory` in its config.json. This is the only resolver for those
- * settings: @craft-agent/shared's getWorkspaceSkillsPath/getWorkspaceSourcesPath delegate
- * here, and session tools running in a subprocess (no dependency on shared) use it directly,
- * so every process resolves the same folder.
+ * `defaults.sourcesDirectory` in its config.json, and load skills from more folders with
+ * `defaults.extraSkillDirs`. This is the only resolver for those settings:
+ * @craft-agent/shared's getWorkspaceSkillsPath/getWorkspaceSourcesPath/
+ * getWorkspaceExtraSkillsPaths delegate here, and session tools running in a subprocess
+ * (no dependency on shared) use it directly, so every process resolves the same folders.
  */
 
 import { readFileSync, statSync } from 'node:fs';
@@ -17,6 +18,8 @@ interface WorkspaceDirs {
   stamp: string;
   skillsDirectory: string | null;
   sourcesDirectory: string | null;
+  /** `extraSkillDirs` entries, expanded; whether each folder exists is checked on each lookup */
+  extraSkillDirs: string[];
 }
 
 /**
@@ -63,10 +66,13 @@ function readWorkspaceDirs(workspaceRootPath: string): WorkspaceDirs | null {
   const read = (value: unknown): string | null =>
     typeof value === 'string' && value.trim() ? expandWorkspaceDirPath(value, workspaceRootPath) : null;
 
+  const extra = Array.isArray(defaults?.extraSkillDirs) ? defaults.extraSkillDirs : [];
+
   const dirs: WorkspaceDirs = {
     stamp,
     skillsDirectory: read(defaults?.skillsDirectory),
     sourcesDirectory: read(defaults?.sourcesDirectory),
+    extraSkillDirs: extra.map(read).filter((dir): dir is string => dir !== null),
   };
   dirsCache.set(workspaceRootPath, dirs);
   return dirs;
@@ -84,4 +90,20 @@ export function resolveSourcesDir(workspaceRootPath: string): string {
  */
 export function resolveSkillsDir(workspaceRootPath: string): string {
   return readWorkspaceDirs(workspaceRootPath)?.skillsDirectory ?? join(workspaceRootPath, 'skills');
+}
+
+/**
+ * The workspace's extra skill folders from `extraSkillDirs`, in the order listed, each folder
+ * once; folders that do not exist are skipped.
+ */
+export function resolveExtraSkillDirs(workspaceRootPath: string): string[] {
+  return Array.from(new Set(readWorkspaceDirs(workspaceRootPath)?.extraSkillDirs ?? [])).filter(isDirectory);
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }

@@ -11,7 +11,7 @@ import { isDecisionFeatureActive } from '../decisions/resolve.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { readPluginName } from '../utils/workspace.ts';
 import { formatBytes } from '../utils/binary-detection.ts';
-import { getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
+import { getWorkspaceSourcesPath, getWorkspaceSkillsPath, getWorkspaceExtraSkillsPaths } from '../workspaces/storage.ts';
 import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
@@ -628,6 +628,10 @@ function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string
   const skillsPath = workspaceRootPath
     ? getWorkspaceSkillsPath(workspaceRootPath)
     : `${workspacePath}/skills`;
+  // Extra skill folders (extraSkillDirs), one line each between workspace and global
+  const extraSkillLines = (workspaceRootPath ? getWorkspaceExtraSkillsPaths(workspaceRootPath) : [])
+    .map(dir => `- Extra: \`${dir}/{slug}/SKILL.md\`\n`)
+    .join('');
 
   // Read the SDK plugin name from .claude-plugin/plugin.json — this is what the SDK
   // uses to resolve skills. Falls back to basename for backwards compatibility.
@@ -698,10 +702,10 @@ Skills are reusable instruction sets that teach you specialized behaviors. Each 
 1. Read its \`SKILL.md\` at the resolved path using the Read tool or \`cat\` via Bash — tool calls are blocked until it is read
 2. Follow the instructions in the file to complete the user's request
 
-Skills are stored at three levels (highest priority first):
+Skills are stored at these levels (highest priority first):
 - Project: \`{projectRoot}/.agents/skills/{slug}/SKILL.md\`
 - Workspace: \`${skillsPath}/{slug}/SKILL.md\`
-- Global: \`~/.agents/skills/{slug}/SKILL.md\`
+${extraSkillLines}- Global: \`~/.agents/skills/{slug}/SKILL.md\`
 
 Create new skills in \`${skillsPath}/{slug}/\` unless the user asks for a project or global skill.
 

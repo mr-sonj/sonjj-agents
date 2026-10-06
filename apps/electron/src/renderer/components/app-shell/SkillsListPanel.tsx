@@ -78,9 +78,9 @@ export function SkillsListPanel({
         title: skill.metadata.name,
         badges: (
           <span className="flex items-center gap-1.5 min-w-0">
-            {skill.source === 'project' && (
+            {(skill.source === 'project' || skill.source === 'extra') && (
               <span className="shrink-0 text-[10px] px-1.5 py-0.5 rounded-full bg-foreground/5 text-muted-foreground">
-                {t('skillsList.projectBadge')}
+                {skill.source === 'project' ? t('skillsList.projectBadge') : t('skillsList.extraBadge')}
               </span>
             )}
             <span className="truncate">{skill.metadata.description}</span>

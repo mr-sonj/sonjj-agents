@@ -51,7 +51,7 @@ import { permissionsConfigCache, type PermissionsContext } from '../permissions-
 import type { PrerequisiteCheckResult } from './prerequisite-manager.ts';
 import { getBashRememberKey, getFileWriteRememberKey, getNetworkCommandHosts, type PermissionRemember } from './permission-remember.ts';
 import { rewriteBashWithRtk } from './rtk-rewrite.ts';
-import { getWorkspaceSkillsPath } from '../../workspaces/storage.ts';
+import { getWorkspaceExtraSkillsPaths, getWorkspaceSkillsPath } from '../../workspaces/storage.ts';
 
 // ============================================================
 // TYPES
@@ -264,7 +264,7 @@ function resolveSkillPlugin(
   workspaceRootPath: string,
   workingDirectory?: string,
 ): string {
-  // Priority order matches loadAllSkills: project (highest) > workspace > global (lowest)
+  // Priority order matches loadAllSkills: project (highest) > workspace > extra > global (lowest)
 
   // 1. Project: {workingDir}/.agents/skills/{slug}/SKILL.md
   if (workingDirectory && existsSync(join(workingDirectory, PROJECT_AGENT_SKILLS_DIR, bareSlug, 'SKILL.md'))) {
@@ -276,8 +276,9 @@ function resolveSkillPlugin(
     return `${workspaceSlug}:${bareSlug}`;
   }
 
-  // 3. Global: ~/.agents/skills/{slug}/SKILL.md
-  if (existsSync(join(GLOBAL_AGENT_SKILLS_DIR, bareSlug, 'SKILL.md'))) {
+  // 3. Extra skill folders (extraSkillDirs), then global ~/.agents/skills/{slug}/SKILL.md
+  const otherDirs = [...getWorkspaceExtraSkillsPaths(workspaceRootPath), GLOBAL_AGENT_SKILLS_DIR];
+  if (otherDirs.some(dir => existsSync(join(dir, bareSlug, 'SKILL.md')))) {
     return `${AGENTS_PLUGIN_NAME}:${bareSlug}`;
   }
 

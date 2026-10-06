@@ -329,4 +329,38 @@ describe('workspace skills/sources folders', () => {
       rmSync(base, { recursive: true, force: true })
     }
   })
+
+  it('lists each extra skill folder between workspace and global', () => {
+    const base = mkdtempSync(join(tmpdir(), 'prompt-extra-dirs-'))
+    try {
+      const workspace = join(base, 'workspace')
+      const team = join(base, 'team', 'skills')
+      mkdirSync(join(workspace, 'local-skills'), { recursive: true })
+      mkdirSync(team, { recursive: true })
+      writeFileSync(
+        join(workspace, 'config.json'),
+        JSON.stringify({ defaults: { extraSkillDirs: [team, join(base, 'missing'), 'local-skills'] } })
+      )
+
+      const prompt = getSystemPrompt(undefined, undefined, workspace, workspace)
+
+      // In the order listed, relative ones resolved; a folder that does not exist is left out
+      const ws = prompt.indexOf(`- Workspace: \`${join(workspace, 'skills')}/{slug}/SKILL.md\``)
+      const first = prompt.indexOf(`- Extra: \`${team}/{slug}/SKILL.md\``)
+      const second = prompt.indexOf(`- Extra: \`${join(workspace, 'local-skills')}/{slug}/SKILL.md\``)
+      const global = prompt.indexOf('- Global: `~/.agents/skills/{slug}/SKILL.md`')
+      expect(first).toBeGreaterThan(ws)
+      expect(second).toBeGreaterThan(first)
+      expect(global).toBeGreaterThan(second)
+      expect(prompt).not.toContain(join(base, 'missing'))
+      expect(prompt).not.toContain('three levels')
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('has no extra skill folder line when none are configured', () => {
+    const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
+    expect(prompt).not.toContain('- Extra:')
+  })
 })

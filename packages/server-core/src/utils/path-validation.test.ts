@@ -9,6 +9,9 @@ import {
   isValidWorkspaceRootPath,
   isValidCustomDirectory,
   isValidDirectorySetting,
+  isValidExtraSkillDir,
+  validateExtraSkillDirs,
+  savedExtraSkillDirs,
 } from './path-validation'
 
 function directoryStats(): Stats {
@@ -246,6 +249,105 @@ describe('isValidDirectorySetting', () => {
       expect(isValidDirectorySetting(workspace, join(workspace, 'skills'), workspace, join(workspace, 'sources'))).toEqual({
         valid: false,
         reason: 'Cannot be the workspace folder itself.',
+      })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('isValidExtraSkillDir', () => {
+  it('accepts an existing folder; a relative entry starts at the workspace root', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dir-'))
+    try {
+      const workspace = join(base, 'workspace')
+      mkdirSync(join(base, 'repos'))
+      mkdirSync(join(workspace, 'local'), { recursive: true })
+
+      expect(isValidExtraSkillDir(join(base, 'repos'), workspace)).toEqual({ valid: true })
+      expect(isValidExtraSkillDir('local', workspace)).toEqual({ valid: true })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a missing folder, naming where it looked', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dir-'))
+    try {
+      expect(isValidExtraSkillDir('missing', base)).toEqual({
+        valid: false,
+        reason: `Directory not found: ${join(base, 'missing')}`,
+      })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('takes * as part of a folder name', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dir-'))
+    try {
+      mkdirSync(join(base, 'repos', 'one', 'skills'), { recursive: true })
+      const entry = join(base, 'repos', '*', 'skills')
+      expect(isValidExtraSkillDir(entry, base)).toEqual({ valid: false, reason: `Directory not found: ${entry}` })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('rejects a file', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dir-'))
+    try {
+      const file = join(base, 'notes.txt')
+      writeFileSync(file, '')
+      expect(isValidExtraSkillDir(file, base)).toEqual({ valid: false, reason: `Not a directory: ${file}` })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+})
+
+describe('savedExtraSkillDirs', () => {
+  it('keeps the path entries of a hand-edited list as written', () => {
+    expect(savedExtraSkillDirs([' ~/a ', 1, null, { dir: 'b' }, 'c'])).toEqual([' ~/a ', 'c'])
+  })
+
+  it('reads anything but a list as no folders', () => {
+    expect(savedExtraSkillDirs(undefined)).toEqual([])
+    expect(savedExtraSkillDirs('~/skills')).toEqual([])
+  })
+})
+
+describe('validateExtraSkillDirs', () => {
+  it('trims entries and drops blanks and repeats', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dirs-'))
+    try {
+      const a = join(base, 'a')
+      mkdirSync(a)
+      expect(validateExtraSkillDirs([` ${a} `, '', a, '  '], base)).toEqual({ valid: true, dirs: [a] })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('returns no list when nothing is left', () => {
+    expect(validateExtraSkillDirs([' '], '/tmp')).toEqual({ valid: true, dirs: undefined })
+    expect(validateExtraSkillDirs(undefined, '/tmp')).toEqual({ valid: true, dirs: undefined })
+  })
+
+  it('rejects a value that is not a list of strings', () => {
+    expect(validateExtraSkillDirs('/tmp', '/tmp').valid).toBe(false)
+    expect(validateExtraSkillDirs([42], '/tmp').valid).toBe(false)
+  })
+
+  it('checks new entries but keeps saved ones whose folder is gone', () => {
+    const base = mkdtempSync(join(tmpdir(), 'extra-skill-dirs-'))
+    try {
+      const gone = join(base, 'gone')
+      const missing = join(base, 'missing')
+      expect(validateExtraSkillDirs([gone], base, [gone])).toEqual({ valid: true, dirs: [gone] })
+      expect(validateExtraSkillDirs([gone, missing], base, [gone])).toEqual({
+        valid: false,
+        reason: `Directory not found: ${missing}`,
       })
     } finally {
       rmSync(base, { recursive: true, force: true })

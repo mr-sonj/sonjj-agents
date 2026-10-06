@@ -770,6 +770,8 @@ export interface WorkspaceSettings {
   skillsDirectory?: string
   /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/. */
   sourcesDirectory?: string
+  /** More folders to load skills from, as written in the config. */
+  extraSkillDirs?: string[]
   localMcpEnabled?: boolean
   defaultLlmConnection?: string
   enabledSourceSlugs?: string[]

@@ -51,6 +51,8 @@ export interface WorkspaceConfig {
     skillsDirectory?: string;
     /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/ */
     sourcesDirectory?: string;
+    /** More folders to load skills from. Relative = from {workspaceRoot} */
+    extraSkillDirs?: string[];
     colorTheme?: string; // Color theme override for this workspace (preset ID). Undefined = inherit from app default.
   };
 
