@@ -39,6 +39,18 @@ export function allowCraftMetadataProperties<T>(schema: T): T {
   const nextSchema = cloneWithDescriptors(schema);
   const nextProperties = cloneWithDescriptors(properties);
 
+  // Proxy schemas cross a JSONL process boundary and therefore do not retain
+  // any TypeBox/Zod metadata. Keep the JSON Schema root explicit: Google
+  // rejects properties/required when the root type is absent or non-object.
+  if (nextSchema.type !== 'object' && nextSchema.type !== 'OBJECT') {
+    Object.defineProperty(nextSchema, 'type', {
+      value: 'object',
+      enumerable: true,
+      configurable: true,
+      writable: true,
+    });
+  }
+
   if (!(CRAFT_DISPLAY_NAME_KEY in nextProperties)) {
     nextProperties[CRAFT_DISPLAY_NAME_KEY] = CRAFT_DISPLAY_NAME_SCHEMA;
   }

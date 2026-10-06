@@ -11,7 +11,10 @@
  * one entry in SESSION_TOOL_DEFS.
  */
 
-import { z } from 'zod';
+// zod-to-json-schema 3.x consumes Zod 3 schemas. The standalone server ships a
+// hoisted Zod 4 package, so importing the explicit compatibility entrypoint is
+// required there; importing bare "zod" silently converts every schema to {}.
+import { z } from 'zod/v3';
 import { zodToJsonSchema } from 'zod-to-json-schema';
 import type { SessionToolContext } from './context.ts';
 import type { ToolResult } from './types.ts';
@@ -896,6 +899,9 @@ export function getToolDefsAsJsonSchema(opts?: {
     // Strip metadata not needed by MCP/Pi consumers
     delete jsonSchema.$schema;
     delete jsonSchema.additionalProperties;
+    if (jsonSchema.type !== 'object' || typeof jsonSchema.properties !== 'object' || jsonSchema.properties === null) {
+      throw new Error(`Session tool "${def.name}" produced an invalid root JSON schema`);
+    }
     return {
       name: prefix + def.name,
       description: def.description,
