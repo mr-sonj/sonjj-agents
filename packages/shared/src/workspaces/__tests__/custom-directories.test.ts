@@ -3,7 +3,7 @@
  * `defaults.sourcesDirectory` in a workspace config.json).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join } from 'path';
 import { resolveExtraSkillDirs, resolveSkillsDir, resolveSourcesDir } from '@craft-agent/session-tools-core';
@@ -135,6 +135,32 @@ describe('extra skill directories', () => {
     writeDefaults({ extraSkillDirs: [two, one, two] });
 
     expect(getWorkspaceExtraSkillsPaths(root)).toEqual([two, one]);
+  });
+
+  it('lists a folder once when another entry reaches it through a symlink', () => {
+    const [real] = makeDirs('p/real');
+    const link = join(tempDir, 'p/link');
+    symlinkSync(real, link);
+    writeDefaults({ extraSkillDirs: [link, real] });
+
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([link]);
+  });
+
+  it('leaves out the workspace skills folder, which loads as the workspace level', () => {
+    const [team] = makeDirs('team');
+    const link = join(tempDir, 'skills-link');
+    symlinkSync(getWorkspaceSkillsPath(root), link);
+    writeDefaults({ extraSkillDirs: ['skills', link, team] });
+
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([team]);
+  });
+
+  const globalSkillsDir = join(homedir(), '.agents', 'skills');
+  it.skipIf(!existsSync(globalSkillsDir))('leaves out ~/.agents/skills, which loads as the global level', () => {
+    const [team] = makeDirs('team');
+    writeDefaults({ extraSkillDirs: ['~/.agents/skills', team] });
+
+    expect(getWorkspaceExtraSkillsPaths(root)).toEqual([team]);
   });
 
   it('sees a folder created after the config was read', () => {
