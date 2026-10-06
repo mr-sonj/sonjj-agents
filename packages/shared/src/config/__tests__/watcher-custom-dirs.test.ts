@@ -266,3 +266,42 @@ describe('ConfigWatcher custom skills directory', () => {
     expect(await waitFor(() => skillEvents.some(e => e.slug === 'second' && e.name === 'After'))).toBe(true);
   });
 });
+
+describe('ConfigWatcher extra skill folders', () => {
+  function startExtraWatcher(events: string[][]): ConfigWatcher {
+    watcher = new ConfigWatcher(root, {
+      onSkillsListChange: (skills) => events.push(skills.filter(s => s.source === 'extra').map(s => s.slug).sort()),
+    });
+    watcher.start();
+    return watcher;
+  }
+
+  function setExtraSkillDirs(dirs: string[]): void {
+    const config = loadWorkspaceConfig(root)!;
+    saveWorkspaceConfig(root, { ...config, defaults: { ...config.defaults, extraSkillDirs: dirs } });
+  }
+
+  it('broadcasts the skills list when the extra folders change, even with a warm skills cache', () => {
+    writeSkill(join(tempDir, 'repos', 'one', '.agents', 'skills'), 'extra-one');
+    writeSkill(join(tempDir, 'repos', 'two', '.agents', 'skills'), 'extra-two');
+    const events: string[][] = [];
+
+    const w = startExtraWatcher(events);
+    loadAllSkills(root); // warm the skills cache
+    setExtraSkillDirs([join(tempDir, 'repos', 'one', '.agents', 'skills'), join(tempDir, 'repos', 'two', '.agents', 'skills')]);
+    w.refreshDirectoryPaths();
+
+    expect(events.at(-1)).toEqual(['extra-one', 'extra-two']);
+  });
+
+  it('does not broadcast when the extra folders stay the same', () => {
+    writeSkill(join(tempDir, 'extra'), 'extra-skill');
+    setExtraSkillDirs([join(tempDir, 'extra')]);
+    const events: string[][] = [];
+
+    const w = startExtraWatcher(events);
+    w.refreshDirectoryPaths();
+
+    expect(events).toEqual([]);
+  });
+});

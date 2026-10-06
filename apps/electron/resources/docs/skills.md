@@ -35,7 +35,8 @@ When a skill is invoked (e.g., `[skill:commit]`), it is resolved using the follo
 
 1. **Project Skill** - `{projectRoot}/.agents/skills/commit/SKILL.md` in the session's working directory.
 2. **Workspace Skill** - `{skills-directory}/commit/SKILL.md`, the workspace skills directory.
-3. **Global Skill** - `~/.agents/skills/commit/SKILL.md` shared across all projects.
+3. **Extra Skill** - `{extra-folder}/commit/SKILL.md` in a folder from the workspace's `extraSkillDirs`; the first folder listed wins.
+4. **Global Skill** - `~/.agents/skills/commit/SKILL.md` shared across all projects.
 
 This allows you to:
 - **Override behaviors** - Create a project or workspace skill with the same slug to replace global/default behavior
@@ -59,6 +60,27 @@ Skills are stored as folders under the workspace skills directory:
 > as `Skills: <path>`. By default it's `~/.craft-agent/workspaces/{id}/skills/`,
 > but it can be customized per workspace via `skillsDirectory` in `config.json`.
 > When set, skills are read from that custom path instead.
+
+### Extra skill folders
+
+A workspace can load skills from more folders with `extraSkillDirs` in its `config.json`
+(Settings > Workspace > Extra Skill Folders):
+
+```json
+"defaults": {
+  "extraSkillDirs": ["~/Projects/my-app/.agents/skills", "/shared/team-skills"]
+}
+```
+
+- Each entry is one folder, holding skills as `{folder}/{slug}/SKILL.md`; `~` is the home folder
+  and a relative path starts at the workspace folder. Folders that do not exist are skipped.
+- These skills are marked **extra** and cannot be deleted or sent to another workspace from the app;
+  editing one changes the file in its own folder. New skills still go in the workspace skills directory.
+- Changing the setting refreshes the skills list at once. Extra folders are not watched (like
+  `~/.agents/skills`) and the skills list is cached for up to five minutes: a skill added or edited
+  there later reaches the agent within about five minutes, and the app's skills list the next time
+  it loads skills after that (switching workspace, restarting the app). A change to the setting or
+  to the workspace skills directory shows it at once.
 
 ## SKILL.md Format
 

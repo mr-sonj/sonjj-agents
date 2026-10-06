@@ -77,7 +77,9 @@ export function SkillsListPanel({
       mapItem={(skill) => ({
         icon: <SkillAvatar skill={skill} size="sm" workspaceId={workspaceId} />,
         title: skill.metadata.name,
-        titleTrailing: skill.source === 'project' ? t('skillsList.projectBadge') : undefined,
+        titleTrailing: skill.source === 'project'
+          ? t('skillsList.projectBadge')
+          : skill.source === 'extra' ? t('skillsList.extraBadge') : undefined,
         subtitle: skill.metadata.description || undefined,
         menu: (
           <SkillMenu
