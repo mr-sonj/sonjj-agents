@@ -311,13 +311,9 @@ export default function WorkspaceSettingsPage() {
   const handleClearSkillsDirectory = useCallback(async () => {
     if (!window.electronAPI) return
 
-    try {
-      const saved = await updateWorkspaceSetting('skillsDirectory', undefined)
-      if (saved) {
-        setSkillsDirectory('')
-      }
-    } catch (error) {
-      console.error('Failed to clear skills directory:', error)
+    const saved = await updateWorkspaceSetting('skillsDirectory', undefined)
+    if (saved) {
+      setSkillsDirectory('')
     }
   }, [updateWorkspaceSetting])
 
@@ -339,13 +335,9 @@ export default function WorkspaceSettingsPage() {
   const handleClearSourcesDirectory = useCallback(async () => {
     if (!window.electronAPI) return
 
-    try {
-      const saved = await updateWorkspaceSetting('sourcesDirectory', undefined)
-      if (saved) {
-        setSourcesDirectory('')
-      }
-    } catch (error) {
-      console.error('Failed to clear sources directory:', error)
+    const saved = await updateWorkspaceSetting('sourcesDirectory', undefined)
+    if (saved) {
+      setSourcesDirectory('')
     }
   }, [updateWorkspaceSetting])
 
@@ -599,33 +591,33 @@ export default function WorkspaceSettingsPage() {
             }
           />
           <SettingsRow
-            label="Skills Directory"
-            description={skillsDirectory || 'Default (workspace/skills/)'}
+            label={t('settings.workspace.skillsDirectory')}
+            description={skillsDirectory || `${t('common.default')} (workspace/skills/)`}
             action={
               <div className="flex items-center gap-2">
                 {skillsDirectory && (
                   <Button variant="ghost" size="md" onClick={handleClearSkillsDirectory}>
-                    Clear
+                    {t('common.clear')}
                   </Button>
                 )}
                 <Button variant="secondary" size="md" onClick={handleChangeSkillsDirectory}>
-                  Change...
+                  {t('common.change')}
                 </Button>
               </div>
             }
           />
           <SettingsRow
-            label="Sources Directory"
-            description={sourcesDirectory || 'Default (workspace/sources/)'}
+            label={t('settings.workspace.sourcesDirectory')}
+            description={sourcesDirectory || `${t('common.default')} (workspace/sources/)`}
             action={
               <div className="flex items-center gap-2">
                 {sourcesDirectory && (
                   <Button variant="ghost" size="md" onClick={handleClearSourcesDirectory}>
-                    Clear
+                    {t('common.clear')}
                   </Button>
                 )}
                 <Button variant="secondary" size="md" onClick={handleChangeSourcesDirectory}>
-                  Change...
+                  {t('common.change')}
                 </Button>
               </div>
             }
