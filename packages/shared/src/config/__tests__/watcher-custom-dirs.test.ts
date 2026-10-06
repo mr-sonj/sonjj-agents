@@ -287,9 +287,9 @@ describe('ConfigWatcher custom skills directory', () => {
 });
 
 describe('ConfigWatcher extra skill folders', () => {
-  function startExtraWatcher(events: string[][]): ConfigWatcher {
+  function startExtraWatcher(events: string[][], label: (skill: LoadedSkill) => string = s => s.slug): ConfigWatcher {
     watcher = new ConfigWatcher(root, {
-      onSkillsListChange: (skills) => events.push(skills.filter(s => s.source === 'extra').map(s => s.slug).sort()),
+      onSkillsListChange: (skills) => events.push(skills.filter(s => s.source === 'extra').map(label).sort()),
     });
     watcher.start();
     return watcher;
@@ -320,6 +320,96 @@ describe('ConfigWatcher extra skill folders', () => {
 
     const w = startExtraWatcher(events);
     w.refreshDirectoryPaths();
+
+    expect(events).toEqual([]);
+  });
+
+  it('reloads the skills list when a skill is added to an extra folder, even with a warm skills cache', async () => {
+    const extra = join(tempDir, 'extra');
+    writeSkill(extra, 'first');
+    setExtraSkillDirs([extra]);
+    const events: string[][] = [];
+
+    startExtraWatcher(events);
+    loadAllSkills(root); // warm the skills cache
+    await Bun.sleep(200);
+    writeSkill(extra, 'second');
+
+    expect(await waitFor(() => events.at(-1)?.join() === 'first,second')).toBe(true);
+  });
+
+  it('reloads the skills list when an extra skill is edited', async () => {
+    const extra = join(tempDir, 'extra');
+    writeSkill(extra, 'tool', 'Before');
+    setExtraSkillDirs([extra]);
+    const events: string[][] = [];
+
+    startExtraWatcher(events, s => s.metadata.name);
+    await Bun.sleep(200);
+    writeSkill(extra, 'tool', 'After');
+
+    expect(await waitFor(() => events.at(-1)?.join() === 'After')).toBe(true);
+  });
+
+  it('starts watching an extra folder once it is added to the setting', async () => {
+    const extra = join(tempDir, 'extra');
+    mkdirSync(extra, { recursive: true });
+    const events: string[][] = [];
+
+    const w = startExtraWatcher(events);
+    setExtraSkillDirs([extra]);
+    w.refreshDirectoryPaths();
+    expect(w._getExtraWatchedDirs()).toEqual([extra]);
+    await Bun.sleep(200);
+    writeSkill(extra, 'late');
+
+    expect(await waitFor(() => events.at(-1)?.join() === 'late')).toBe(true);
+  });
+
+  it('stops watching an extra folder removed from the setting', () => {
+    const extra = join(tempDir, 'extra');
+    mkdirSync(extra, { recursive: true });
+    setExtraSkillDirs([extra]);
+
+    const w = startExtraWatcher([]);
+    expect(w._getExtraWatchedDirs()).toEqual([extra]);
+    setExtraSkillDirs([]);
+    w.refreshDirectoryPaths();
+
+    expect(w._getExtraWatchedDirs()).toEqual([]);
+  });
+
+  it('reloads an extra folder inside the workspace through the workspace watcher', async () => {
+    const extra = join(root, 'more-skills');
+    mkdirSync(extra, { recursive: true });
+    setExtraSkillDirs([extra]);
+    const events: string[][] = [];
+
+    const w = startExtraWatcher(events);
+    expect(w._getExtraWatchedDirs()).toEqual([]);
+    await Bun.sleep(200);
+    writeSkill(extra, 'inside');
+
+    expect(await waitFor(() => events.at(-1)?.join() === 'inside')).toBe(true);
+  });
+
+  it('watches an extra folder nested in another extra folder only through the outer one', () => {
+    const outer = join(tempDir, 'extra');
+    mkdirSync(join(outer, 'nested'), { recursive: true });
+    setExtraSkillDirs([join(outer, 'nested'), outer]);
+
+    expect(startExtraWatcher([])._getExtraWatchedDirs()).toEqual([outer]);
+  });
+
+  it('does not watch an extra folder that contains the workspace', async () => {
+    setExtraSkillDirs([tempDir]);
+    const events: string[][] = [];
+
+    const w = startExtraWatcher(events);
+    expect(w._getExtraWatchedDirs()).toEqual([]);
+    await Bun.sleep(200);
+    writeFileSync(join(root, 'notes.txt'), 'a change in the workspace is not a skill change');
+    await Bun.sleep(300);
 
     expect(events).toEqual([]);
   });
