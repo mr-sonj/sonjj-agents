@@ -46,6 +46,9 @@ export interface WorkspaceConfig {
     permissionMode?: PermissionMode; // Default permission mode ('safe', 'ask', 'guarded', 'allow-all')
     cyclablePermissionModes?: PermissionMode[]; // Which modes can be cycled with SHIFT+TAB (min 2, default: Explore, Ask, Execute)
     workingDirectory?: string;
+    /** Folder last picked in a session, remembered so the next new session starts there.
+     *  Cleared on reset, which sends new sessions back to {@link workingDirectory}. */
+    lastSessionWorkingDirectory?: string;
     thinkingLevel?: ThinkingLevel; // Default thinking level for new sessions (default: 'medium')
     /** Custom directory path for skills. Undefined = uses {workspaceRoot}/skills/ */
     skillsDirectory?: string;
