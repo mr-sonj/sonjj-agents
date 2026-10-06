@@ -228,10 +228,11 @@ describe('ConfigWatcher custom skills directory', () => {
     const w = startWatcher();
     expect(w._getExtraWatchedDirs()).toEqual([outer]);
     await Bun.sleep(200);
+    // One write at a time: on Linux Bun drops a watcher's second change event within the
+    // same millisecond, even for another file
     writeSkill(outer, 'inner', 'After');
-    writeFileSync(join(outer, 'SKILL.md'), '---\nname: Outer After\ndescription: Test skill\n---\n');
-
     expect(await waitFor(() => skillEvents.some(e => e.slug === 'a-inner' && e.name === 'After'))).toBe(true);
+    writeFileSync(join(outer, 'SKILL.md'), '---\nname: Outer After\ndescription: Test skill\n---\n');
     expect(await waitFor(() => skillEvents.some(e => e.slug === 'b-outer' && e.name === 'Outer After'))).toBe(true);
   });
 
@@ -264,6 +265,24 @@ describe('ConfigWatcher custom skills directory', () => {
 
     expect(await waitFor(() => skillEvents.some(e => e.slug === 'first' && e.name === 'After'))).toBe(true);
     expect(await waitFor(() => skillEvents.some(e => e.slug === 'second' && e.name === 'After'))).toBe(true);
+  });
+
+  it('reloads every link to a folder when the change is reported under only one of them', async () => {
+    // On Linux the workspace watcher follows symlinks, and a folder reached through several
+    // paths reports its events under just one of them
+    const target = join(tempDir, 'shared-target');
+    writeSkill(tempDir, 'shared-target', 'After');
+    symlinkSync(target, join(root, 'skills', 'first'), linkType);
+    symlinkSync(target, join(root, 'skills', 'second'), linkType);
+    writeSkill(join(root, 'skills'), 'plain', 'After');
+    symlinkSync(join(root, 'skills', 'plain'), join(root, 'skills', 'plain-link'), linkType);
+
+    const w = startWatcher();
+    w.notifyFileChange('skills/second/SKILL.md');
+    w.notifyFileChange('skills/plain-link/SKILL.md');
+
+    expect(await waitFor(() => skillEvents.some(e => e.slug === 'first' && e.name === 'After'))).toBe(true);
+    expect(await waitFor(() => skillEvents.some(e => e.slug === 'plain' && e.name === 'After'))).toBe(true);
   });
 });
 
