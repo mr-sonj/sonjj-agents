@@ -21,7 +21,7 @@ import { homedir } from 'os';
 import { randomUUID } from 'crypto';
 import { expandPath, toPortablePath } from '../utils/paths.ts';
 import { atomicWriteFileSync, readJsonFileSync } from '../utils/files.ts';
-import { expandWorkspaceDirPath, resolveSkillsDir, resolveSourcesDir } from '@craft-agent/session-tools-core/workspace-dirs';
+import { resolveSkillsDir, resolveSourcesDir } from '@craft-agent/session-tools-core/workspace-dirs';
 import { CONFIG_DIR, DEFAULT_CONFIG_DIR_NAME } from '../config/paths.ts';
 import { getDefaultStatusConfig, saveStatusConfig, ensureDefaultIconFiles } from '../statuses/storage.ts';
 import { getDefaultLabelConfig, saveLabelConfig } from '../labels/storage.ts';
@@ -127,13 +127,6 @@ export function loadWorkspaceConfig(rootPath: string): WorkspaceConfig | null {
     if (config.defaults?.workingDirectory) {
       config.defaults.workingDirectory = expandPath(config.defaults.workingDirectory);
     }
-    if (config.defaults?.skillsDirectory) {
-      config.defaults.skillsDirectory = expandWorkspaceDirPath(config.defaults.skillsDirectory, rootPath);
-    }
-    if (config.defaults?.sourcesDirectory) {
-      config.defaults.sourcesDirectory = expandWorkspaceDirPath(config.defaults.sourcesDirectory, rootPath);
-    }
-
     // Compatibility: accept canonical or legacy permission mode names on read
     if (config.defaults?.permissionMode && typeof config.defaults.permissionMode === 'string') {
       const parsed = parsePermissionMode(config.defaults.permissionMode);

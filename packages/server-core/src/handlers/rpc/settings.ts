@@ -137,7 +137,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     }
 
     // Load workspace config
-    const { loadWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+    const { loadWorkspaceConfig, getWorkspaceSkillsPath, getWorkspaceSourcesPath } = await import('@craft-agent/shared/workspaces')
     const config = loadWorkspaceConfig(workspace.rootPath)
 
     return {
@@ -148,8 +148,8 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       thinkingLevel: normalizeThinkingLevel(config?.defaults?.thinkingLevel),
       codingMode: config?.defaults?.codingMode === true,
       workingDirectory: config?.defaults?.workingDirectory,
-      skillsDirectory: config?.defaults?.skillsDirectory,
-      sourcesDirectory: config?.defaults?.sourcesDirectory,
+      skillsDirectory: config?.defaults?.skillsDirectory ? getWorkspaceSkillsPath(workspace.rootPath) : undefined,
+      sourcesDirectory: config?.defaults?.sourcesDirectory ? getWorkspaceSourcesPath(workspace.rootPath) : undefined,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
