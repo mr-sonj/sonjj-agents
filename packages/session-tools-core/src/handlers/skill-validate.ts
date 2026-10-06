@@ -15,6 +15,7 @@ import type { SessionToolContext } from '../context.ts';
 import type { ToolResult } from '../types.ts';
 import { errorResponse } from '../response.ts';
 import { resolveSessionWorkingDirectory } from '../source-helpers.ts';
+import { resolveSkillsDir } from '../workspace-dirs.ts';
 import {
   validateSlug,
   validateSkillContent,
@@ -42,8 +43,8 @@ function resolveSkillMdPath(
     }
   }
 
-  // 2. Workspace-level (medium priority): {workspace}/skills/{slug}/SKILL.md
-  const workspacePath = join(ctx.workspacePath, 'skills', slug, 'SKILL.md');
+  // 2. Workspace-level (medium priority): {workspace}/skills/{slug}/SKILL.md, or the custom skillsDirectory
+  const workspacePath = join(resolveSkillsDir(ctx.workspacePath), slug, 'SKILL.md');
   if (ctx.fs.exists(workspacePath)) {
     return { path: workspacePath, tier: 'workspace' };
   }
@@ -90,7 +91,7 @@ export async function handleSkillValidate(
   if (!resolved) {
     const searchedPaths = [
       workingDirectory ? `  - ${join(workingDirectory, '.agents', 'skills', skillSlug, 'SKILL.md')} (project)` : null,
-      `  - ${join(ctx.workspacePath, 'skills', skillSlug, 'SKILL.md')} (workspace)`,
+      `  - ${join(resolveSkillsDir(ctx.workspacePath), skillSlug, 'SKILL.md')} (workspace)`,
       `  - ${join(homedir(), '.agents', 'skills', skillSlug, 'SKILL.md')} (global)`,
     ].filter(Boolean).join('\n');
 

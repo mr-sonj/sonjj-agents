@@ -1,4 +1,7 @@
 import { describe, it, expect, mock, beforeEach } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { tmpdir } from 'os'
+import { join } from 'path'
 
 // Stub the preferences module so we can toggle `getCoAuthorPreference` per test
 // without touching disk. `formatPreferencesForPrompt` is stubbed to '' because
@@ -291,5 +294,39 @@ describe('formatProjectContextForPrompt', () => {
     expect(block).toContain('&lt;/project_assets&gt;')
     expect(occurrences(block, '</project_context>')).toBe(1)
     expect(occurrences(block, '</project_assets>')).toBe(1)
+  })
+})
+
+describe('workspace skills/sources folders', () => {
+  it('points the agent at custom skills and sources folders', () => {
+    const base = mkdtempSync(join(tmpdir(), 'prompt-custom-dirs-'))
+    try {
+      const workspace = join(base, 'workspace')
+      const skills = join(base, 'my-skills')
+      const sources = join(base, 'my-sources')
+      mkdirSync(workspace)
+      writeFileSync(
+        join(workspace, 'config.json'),
+        JSON.stringify({ defaults: { skillsDirectory: skills, sourcesDirectory: sources } })
+      )
+
+      const prompt = getSystemPrompt(undefined, undefined, workspace, workspace)
+
+      expect(prompt).toContain(`- Sources: \`${sources}/{slug}/\``)
+      expect(prompt).toContain(`- Skills: \`${skills}/{slug}/\``)
+      expect(prompt).toContain(`Create new skills in \`${skills}/{slug}/\` unless the user asks for a project or global skill.`)
+      expect(prompt).not.toContain(`${workspace}/skills`)
+      expect(prompt).not.toContain(`${workspace}/sources`)
+
+      // Resolution order: project, then workspace, then global
+      const project = prompt.indexOf('- Project: `{projectRoot}/.agents/skills/{slug}/SKILL.md`')
+      const ws = prompt.indexOf(`- Workspace: \`${skills}/{slug}/SKILL.md\``)
+      const global = prompt.indexOf('- Global: `~/.agents/skills/{slug}/SKILL.md`')
+      expect(project).toBeGreaterThan(-1)
+      expect(ws).toBeGreaterThan(project)
+      expect(global).toBeGreaterThan(ws)
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 })

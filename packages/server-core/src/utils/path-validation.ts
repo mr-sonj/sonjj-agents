@@ -1,5 +1,5 @@
-import { statSync, type Stats } from 'fs'
-import { dirname, win32 as pathWin32 } from 'path'
+import { realpathSync, statSync, type Stats } from 'fs'
+import { dirname, resolve, sep, win32 as pathWin32 } from 'path'
 
 export interface PathValidationResult {
   valid: boolean
@@ -121,4 +121,66 @@ export function isValidWorkspaceRootPath(
       }
     }
   }
+}
+
+/**
+ * Validate a custom skills or sources folder for a workspace.
+ * Must be an existing directory (see isValidWorkingDirectory) that is neither the
+ * workspace folder nor one of its parents (the watcher would then watch the whole
+ * tree), nor the folder the other setting already uses. Symlinks are resolved first.
+ */
+export function isValidCustomDirectory(
+  path: string,
+  workspaceRoot: string,
+  otherDirectory?: string
+): PathValidationResult {
+  const trimmed = path.trim()
+  const basic = isValidWorkingDirectory(trimmed)
+  if (!basic.valid) return basic
+
+  const dir = realpathOrResolve(trimmed)
+  const root = realpathOrResolve(workspaceRoot)
+
+  if (dir === root) {
+    return { valid: false, reason: 'Cannot be the workspace folder itself.' }
+  }
+  if (root.startsWith(dir.endsWith(sep) ? dir : dir + sep)) {
+    return { valid: false, reason: 'Cannot be a parent of the workspace folder.' }
+  }
+  if (otherDirectory && isSameDirectory(otherDirectory, dir)) {
+    return SAME_FOLDER
+  }
+
+  return { valid: true }
+}
+
+/**
+ * Validate a new skillsDirectory/sourcesDirectory setting. `path` undefined means going
+ * back to `defaultDirectory`, which must still differ from the folder the other setting
+ * uses; a custom path gets the full isValidCustomDirectory check.
+ */
+export function isValidDirectorySetting(
+  path: string | undefined,
+  defaultDirectory: string,
+  workspaceRoot: string,
+  otherDirectory: string
+): PathValidationResult {
+  if (path === undefined) {
+    return isSameDirectory(defaultDirectory, otherDirectory) ? SAME_FOLDER : { valid: true }
+  }
+  return isValidCustomDirectory(path, workspaceRoot, otherDirectory)
+}
+
+const SAME_FOLDER: PathValidationResult = { valid: false, reason: 'Skills and sources cannot use the same folder.' }
+
+function realpathOrResolve(path: string): string {
+  try {
+    return realpathSync(path)
+  } catch {
+    return resolve(path)
+  }
+}
+
+function isSameDirectory(a: string, b: string): boolean {
+  return realpathOrResolve(a) === realpathOrResolve(b)
 }

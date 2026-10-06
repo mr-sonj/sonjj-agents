@@ -766,6 +766,10 @@ export interface WorkspaceSettings {
   cyclablePermissionModes?: PermissionMode[]
   thinkingLevel?: ThinkingLevel
   workingDirectory?: string
+  /** Custom directory path for skills. Undefined = uses {workspaceRoot}/skills/. */
+  skillsDirectory?: string
+  /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/. */
+  sourcesDirectory?: string
   localMcpEnabled?: boolean
   defaultLlmConnection?: string
   enabledSourceSlugs?: string[]

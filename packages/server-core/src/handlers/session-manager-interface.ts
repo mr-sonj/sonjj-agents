@@ -246,6 +246,7 @@ export interface ISessionManager {
    * Workaround for Bun's fs.watch on Linux not detecting atomic renames.
    */
   notifyConfigFileChange(workspaceRootPath: string, relativePath: string): void
+  refreshWorkspaceDirectoryPaths(workspaceRootPath: string): void
 
   /**
    * Request a (re)capture of a page's preview poster. No-op unless a capturer

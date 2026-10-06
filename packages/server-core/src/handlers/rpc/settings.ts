@@ -1,5 +1,5 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'node:fs'
-import { dirname } from 'path'
+import { dirname, join } from 'path'
 import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import { getPreferencesPath, getSessionDraft, setSessionDraft, deleteSessionDraft, getAllSessionDrafts, getWorkspaceByNameOrId, getDefaultThinkingLevel, setDefaultThinkingLevel } from '@craft-agent/shared/config'
 import { isValidThinkingLevel, normalizeThinkingLevel, THINKING_LEVEL_IDS } from '@craft-agent/shared/agent/thinking-levels'
@@ -9,7 +9,7 @@ import { getWorkspaceOrThrow } from '@craft-agent/server-core/handlers'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { requestClientOpenFileDialog } from '@craft-agent/server-core/transport'
-import { isValidWorkingDirectory } from '../../utils/path-validation'
+import { isValidWorkingDirectory, isValidDirectorySetting } from '../../utils/path-validation'
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.workspace.SETTINGS_GET,
@@ -115,6 +115,8 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       cyclablePermissionModes: config?.defaults?.cyclablePermissionModes,
       thinkingLevel: normalizeThinkingLevel(config?.defaults?.thinkingLevel),
       workingDirectory: config?.defaults?.workingDirectory,
+      skillsDirectory: config?.defaults?.skillsDirectory,
+      sourcesDirectory: config?.defaults?.sourcesDirectory,
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
@@ -124,12 +126,15 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   // Update a workspace setting
   server.handle(RPC_CHANNELS.workspace.SETTINGS_UPDATE, async (_ctx, workspaceId: string, key: string, value: unknown) => {
     const workspace = getWorkspaceOrThrow(workspaceId)
-    const normalizedValue = key === 'workingDirectory' && typeof value === 'string'
+    const isDirectoryKey = key === 'skillsDirectory' || key === 'sourcesDirectory'
+    const trimmedValue = (key === 'workingDirectory' || isDirectoryKey) && typeof value === 'string'
       ? value.trim()
       : value
+    // An empty custom skills/sources folder means "use the default"
+    const normalizedValue = isDirectoryKey && (trimmedValue === '' || trimmedValue === null) ? undefined : trimmedValue
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'localMcpEnabled', 'defaultLlmConnection']
+    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'workingDirectory', 'skillsDirectory', 'sourcesDirectory', 'localMcpEnabled', 'defaultLlmConnection']
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
     }
@@ -149,7 +154,19 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       }
     }
 
-    const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+    const { loadWorkspaceConfig, saveWorkspaceConfig, getWorkspaceSkillsPath, getWorkspaceSourcesPath } = await import('@craft-agent/shared/workspaces')
+
+    // Checked when clearing too: the default folder may be the one the other setting uses
+    if (isDirectoryKey) {
+      const [defaultDirectory, otherDirectory] = key === 'skillsDirectory'
+        ? [join(workspace.rootPath, 'skills'), getWorkspaceSourcesPath(workspace.rootPath)]
+        : [join(workspace.rootPath, 'sources'), getWorkspaceSkillsPath(workspace.rootPath)]
+      const path = normalizedValue === undefined ? undefined : String(normalizedValue)
+      const validation = isValidDirectorySetting(path, defaultDirectory, workspace.rootPath, otherDirectory)
+      if (!validation.valid) {
+        throw new Error(validation.reason!)
+      }
+    }
     const config = loadWorkspaceConfig(workspace.rootPath)
     if (!config) {
       throw new Error(`Failed to load workspace config: ${workspaceId}`)
@@ -170,6 +187,12 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
 
     // Save the config
     saveWorkspaceConfig(workspace.rootPath, config)
+
+    // Re-point the config watcher now so the skills/sources lists update right away
+    if (isDirectoryKey) {
+      deps.sessionManager.refreshWorkspaceDirectoryPaths(workspace.rootPath)
+    }
+
     deps.platform.logger.info(`Workspace setting updated: ${key} = ${JSON.stringify(normalizedValue)}`)
   })
 

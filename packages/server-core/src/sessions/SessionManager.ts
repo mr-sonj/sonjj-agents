@@ -2049,6 +2049,14 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * Re-point the workspace's ConfigWatcher after skillsDirectory/sourcesDirectory is saved,
+   * without waiting for the fs event on config.json (Bun on Linux can miss atomic renames).
+   */
+  refreshWorkspaceDirectoryPaths(workspaceRootPath: string): void {
+    this.configWatchers.get(workspaceRootPath)?.refreshDirectoryPaths()
+  }
+
+  /**
    * Set up ConfigWatcher for a workspace to broadcast live updates
    * (sources added/removed, guide.md changes, etc.)
    * Called eagerly at boot for all workspaces (automations/scheduler) and

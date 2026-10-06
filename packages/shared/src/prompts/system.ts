@@ -11,6 +11,7 @@ import { isDecisionFeatureActive } from '../decisions/resolve.ts';
 import { APP_VERSION } from '../version/index.ts';
 import { readPluginName } from '../utils/workspace.ts';
 import { formatBytes } from '../utils/binary-detection.ts';
+import { getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
 import { globSync } from 'glob';
 import os from 'os';
 import type { ProjectPromptContext } from '../projects/types.ts';
@@ -620,6 +621,14 @@ function getCraftAssistantPrompt(workspaceRootPath?: string, backendName: string
   // Default to ${APP_ROOT}/workspaces/{id} if no path provided
   const workspacePath = workspaceRootPath || `${APP_ROOT}/workspaces/{id}`;
 
+  // Resolve actual sources and skills directories (may be custom paths from config)
+  const sourcesPath = workspaceRootPath
+    ? getWorkspaceSourcesPath(workspaceRootPath)
+    : `${workspacePath}/sources`;
+  const skillsPath = workspaceRootPath
+    ? getWorkspaceSkillsPath(workspaceRootPath)
+    : `${workspacePath}/skills`;
+
   // Read the SDK plugin name from .claude-plugin/plugin.json — this is what the SDK
   // uses to resolve skills. Falls back to basename for backwards compatibility.
   const workspaceId = (workspaceRootPath && readPluginName(workspaceRootPath))
@@ -666,7 +675,7 @@ Sources are external data connections. Each source has:
 - \`guide.md\` - Usage guidelines (read before first use!)
 
 **Using an existing source** (it already appears in \`<sources>\` above):
-1. Read its \`config.json\` and \`guide.md\` at \`${workspacePath}/sources/{slug}/\`
+1. Read its \`config.json\` and \`guide.md\` at \`${sourcesPath}/{slug}/\`
 2. If it needs auth, trigger the appropriate auth tool
 3. Call its tools directly — do not search the workspace for how to use it
 
@@ -676,8 +685,8 @@ Sources are external data connections. Each source has:
 3. Before full setup, confirm whether in-app browser is a better fit for one-off or UI-only tasks
 
 **Workspace structure:**
-- Sources: \`${workspacePath}/sources/{slug}/\`
-- Skills: \`${workspacePath}/skills/{slug}/\`
+- Sources: \`${sourcesPath}/{slug}/\`
+- Skills: \`${skillsPath}/{slug}/\`
 - Theme: \`${workspacePath}/theme.json\`
 
 ## Skills
@@ -689,10 +698,12 @@ Skills are reusable instruction sets that teach you specialized behaviors. Each 
 1. Read its \`SKILL.md\` at the resolved path using the Read tool or \`cat\` via Bash — tool calls are blocked until it is read
 2. Follow the instructions in the file to complete the user's request
 
-Skills are stored at three levels (checked in order):
-- Global: \`~/.agents/skills/{slug}/SKILL.md\`
-- Workspace: \`${workspacePath}/skills/{slug}/SKILL.md\`
+Skills are stored at three levels (highest priority first):
 - Project: \`{projectRoot}/.agents/skills/{slug}/SKILL.md\`
+- Workspace: \`${skillsPath}/{slug}/SKILL.md\`
+- Global: \`~/.agents/skills/{slug}/SKILL.md\`
+
+Create new skills in \`${skillsPath}/{slug}/\` unless the user asks for a project or global skill.
 
 ## Project Context
 

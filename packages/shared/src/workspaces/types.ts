@@ -47,6 +47,10 @@ export interface WorkspaceConfig {
     cyclablePermissionModes?: PermissionMode[]; // Which modes can be cycled with SHIFT+TAB (min 2, default: Explore, Ask, Execute)
     workingDirectory?: string;
     thinkingLevel?: ThinkingLevel; // Default thinking level for new sessions (default: 'medium')
+    /** Custom directory path for skills. Undefined = uses {workspaceRoot}/skills/ */
+    skillsDirectory?: string;
+    /** Custom directory path for sources. Undefined = uses {workspaceRoot}/sources/ */
+    sourcesDirectory?: string;
     colorTheme?: string; // Color theme override for this workspace (preset ID). Undefined = inherit from app default.
   };
 

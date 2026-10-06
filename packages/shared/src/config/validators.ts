@@ -16,7 +16,7 @@ import { z } from 'zod';
 import { existsSync, readFileSync, readdirSync, statSync } from 'fs';
 import { join } from 'path';
 import { CONFIG_DIR } from './paths.ts';
-import { safeJsonParse, readJsonFileSync } from '../utils/files.ts';
+import { safeJsonParse, readJsonFileSync, isDirectorySafe } from '../utils/files.ts';
 import { EntityColorSchema } from '../colors/validate.ts';
 import { THINKING_LEVEL_IDS } from '../agent/thinking-levels.ts';
 import { isValidProviderAuthCombination } from './llm-connections.ts';
@@ -617,7 +617,7 @@ export function validateAllSources(workspaceId: string): ValidationResult {
   const entries = readdirSync(sourcesDir);
   const sourceFolders = entries.filter((entry) => {
     const entryPath = join(sourcesDir, entry);
-    return statSync(entryPath).isDirectory();
+    return isDirectorySafe(entryPath);
   });
 
   if (sourceFolders.length === 0) {
@@ -873,7 +873,7 @@ export function validateAllSkills(workspaceRoot: string): ValidationResult {
   const entries = readdirSync(skillsDir);
   const skillFolders = entries.filter((entry) => {
     const entryPath = join(skillsDir, entry);
-    return statSync(entryPath).isDirectory();
+    return isDirectorySafe(entryPath);
   });
 
   if (skillFolders.length === 0) {
@@ -1537,12 +1537,12 @@ export function validateAllPermissions(workspaceRoot: string): ValidationResult 
   warnings.push(...wsResult.warnings);
 
   // Validate all source-level permissions
-  const sourcesDir = join(workspaceRoot, 'sources');
+  const sourcesDir = getWorkspaceSourcesPath(workspaceRoot);
   if (existsSync(sourcesDir)) {
     const entries = readdirSync(sourcesDir);
     for (const entry of entries) {
       const entryPath = join(sourcesDir, entry);
-      if (statSync(entryPath).isDirectory()) {
+      if (isDirectorySafe(entryPath)) {
         const srcResult = validateSourcePermissions(workspaceRoot, entry);
         errors.push(...srcResult.errors);
         warnings.push(...srcResult.warnings);

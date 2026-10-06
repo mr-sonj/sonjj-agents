@@ -236,8 +236,13 @@ Would you like me to show you what issues are currently open?
 
 ## Overview
 
-Sources are stored as folders under:
-- `~/.craft-agent/workspaces/{workspaceId}/sources/{sourceSlug}/`
+Sources are stored as folders under the workspace sources directory:
+- `{sources-directory}/{sourceSlug}/`
+
+> **Sources directory path:** The actual sources path is shown in the system prompt
+> as `Sources: <path>`. By default it's `~/.craft-agent/workspaces/{id}/sources/`,
+> but it can be customized per workspace via `sourcesDirectory` in `config.json`.
+> When set, sources are read from that custom path instead.
 
 Each source folder contains:
 - `config.json` - Source configuration (required)
@@ -870,9 +875,9 @@ Transport: `stdio`, Command: `npx -y @modelcontextprotocol/server-memory`, no au
 
 Technical steps:
 
-1. Create the source folder:
+1. Create the source folder inside your workspace's sources directory (see path in system prompt):
    ```bash
-   mkdir -p ~/.craft-agent/workspaces/{ws}/sources/my-source
+   mkdir -p {sources-directory}/my-source
    ```
 
 2. Write `config.json` with appropriate settings (see schemas above)

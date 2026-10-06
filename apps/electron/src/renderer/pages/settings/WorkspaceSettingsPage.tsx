@@ -6,7 +6,7 @@
  * Settings:
  * - Identity (Name, Icon)
  * - Permissions (Default mode, Mode cycling)
- * - Advanced (Working directory, Local MCP servers)
+ * - Advanced (Working directory, custom directories, Local MCP servers)
  *
  * Note: AI settings (model, thinking, connection) have been moved to AiSettingsPage.
  */
@@ -65,6 +65,8 @@ export default function WorkspaceSettingsPage() {
   const [isUploadingIcon, setIsUploadingIcon] = useState(false)
   const [permissionMode, setPermissionMode] = useState<PermissionMode>('ask')
   const [workingDirectory, setWorkingDirectory] = useState('')
+  const [skillsDirectory, setSkillsDirectory] = useState('')
+  const [sourcesDirectory, setSourcesDirectory] = useState('')
   const [localMcpEnabled, setLocalMcpEnabled] = useState(true)
   const [isLoadingWorkspace, setIsLoadingWorkspace] = useState(true)
 
@@ -95,6 +97,8 @@ export default function WorkspaceSettingsPage() {
           setWsNameEditing(settings.name || '')
           setPermissionMode(settings.permissionMode || 'ask')
           setWorkingDirectory(settings.workingDirectory || '')
+          setSkillsDirectory(settings.skillsDirectory || '')
+          setSourcesDirectory(settings.sourcesDirectory || '')
           setLocalMcpEnabled(settings.localMcpEnabled ?? true)
           // Load cyclable permission modes from workspace settings
           if (settings.cyclablePermissionModes && settings.cyclablePermissionModes.length >= 2) {
@@ -275,6 +279,62 @@ export default function WorkspaceSettingsPage() {
     const saved = await updateWorkspaceSetting('workingDirectory', undefined)
     if (saved) {
       setWorkingDirectory('')
+    }
+  }, [updateWorkspaceSetting])
+
+  const handleSkillsDirectorySelected = useCallback(async (selectedPath: string) => {
+    const saved = await updateWorkspaceSetting('skillsDirectory', selectedPath)
+    if (saved) {
+      setSkillsDirectory(selectedPath)
+    }
+  }, [updateWorkspaceSetting])
+
+  const {
+    pickDirectory: handleChangeSkillsDirectory,
+    showServerBrowser: showSkillsBrowser,
+    serverBrowserMode: skillsBrowserMode,
+    cancelServerBrowser: cancelSkillsBrowser,
+    confirmServerBrowser: confirmSkillsBrowser,
+  } = useDirectoryPicker(handleSkillsDirectorySelected)
+
+  const handleClearSkillsDirectory = useCallback(async () => {
+    if (!window.electronAPI) return
+
+    try {
+      const saved = await updateWorkspaceSetting('skillsDirectory', undefined)
+      if (saved) {
+        setSkillsDirectory('')
+      }
+    } catch (error) {
+      console.error('Failed to clear skills directory:', error)
+    }
+  }, [updateWorkspaceSetting])
+
+  const handleSourcesDirectorySelected = useCallback(async (selectedPath: string) => {
+    const saved = await updateWorkspaceSetting('sourcesDirectory', selectedPath)
+    if (saved) {
+      setSourcesDirectory(selectedPath)
+    }
+  }, [updateWorkspaceSetting])
+
+  const {
+    pickDirectory: handleChangeSourcesDirectory,
+    showServerBrowser: showSourcesBrowser,
+    serverBrowserMode: sourcesBrowserMode,
+    cancelServerBrowser: cancelSourcesBrowser,
+    confirmServerBrowser: confirmSourcesBrowser,
+  } = useDirectoryPicker(handleSourcesDirectorySelected)
+
+  const handleClearSourcesDirectory = useCallback(async () => {
+    if (!window.electronAPI) return
+
+    try {
+      const saved = await updateWorkspaceSetting('sourcesDirectory', undefined)
+      if (saved) {
+        setSourcesDirectory('')
+      }
+    } catch (error) {
+      console.error('Failed to clear sources directory:', error)
     }
   }, [updateWorkspaceSetting])
 
@@ -547,6 +607,54 @@ export default function WorkspaceSettingsPage() {
                     </div>
                   }
                 />
+                <SettingsRow
+                  label="Skills Directory"
+                  description={skillsDirectory || 'Default (workspace/skills/)'}
+                  action={
+                    <div className="flex items-center gap-2">
+                      {skillsDirectory && (
+                        <button
+                          type="button"
+                          onClick={handleClearSkillsDirectory}
+                          className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors text-foreground/60 hover:text-foreground"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleChangeSkillsDirectory}
+                        className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors"
+                      >
+                        Change...
+                      </button>
+                    </div>
+                  }
+                />
+                <SettingsRow
+                  label="Sources Directory"
+                  description={sourcesDirectory || 'Default (workspace/sources/)'}
+                  action={
+                    <div className="flex items-center gap-2">
+                      {sourcesDirectory && (
+                        <button
+                          type="button"
+                          onClick={handleClearSourcesDirectory}
+                          className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors text-foreground/60 hover:text-foreground"
+                        >
+                          Clear
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={handleChangeSourcesDirectory}
+                        className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors"
+                      >
+                        Change...
+                      </button>
+                    </div>
+                  }
+                />
                 <SettingsToggle
                   label={t("settings.workspace.localMcpServers")}
                   description={t("settings.workspace.localMcpServersDesc")}
@@ -566,6 +674,20 @@ export default function WorkspaceSettingsPage() {
         onSelect={confirmWdBrowser}
         onCancel={cancelWdBrowser}
         initialPath={workingDirectory || undefined}
+      />
+      <ServerDirectoryBrowser
+        open={showSkillsBrowser}
+        mode={skillsBrowserMode}
+        onSelect={confirmSkillsBrowser}
+        onCancel={cancelSkillsBrowser}
+        initialPath={skillsDirectory || undefined}
+      />
+      <ServerDirectoryBrowser
+        open={showSourcesBrowser}
+        mode={sourcesBrowserMode}
+        onSelect={confirmSourcesBrowser}
+        onCancel={cancelSourcesBrowser}
+        initialPath={sourcesDirectory || undefined}
       />
     </div>
   )

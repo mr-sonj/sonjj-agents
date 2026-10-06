@@ -21,6 +21,7 @@ import { homedir } from 'os';
 import { randomUUID } from 'crypto';
 import { expandPath, toPortablePath } from '../utils/paths.ts';
 import { atomicWriteFileSync, readJsonFileSync } from '../utils/files.ts';
+import { expandWorkspaceDirPath, resolveSkillsDir, resolveSourcesDir } from '@craft-agent/session-tools-core/workspace-dirs';
 import { CONFIG_DIR, DEFAULT_CONFIG_DIR_NAME } from '../config/paths.ts';
 import { getDefaultStatusConfig, saveStatusConfig, ensureDefaultIconFiles } from '../statuses/storage.ts';
 import { getDefaultLabelConfig, saveLabelConfig } from '../labels/storage.ts';
@@ -80,11 +81,13 @@ export function getWorkspacePath(workspaceId: string): string {
 }
 
 /**
- * Get path to workspace sources directory
+ * Get path to workspace sources directory.
+ * Returns the custom `sourcesDirectory` from the workspace config if set,
+ * otherwise {rootPath}/sources/.
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSourcesPath(rootPath: string): string {
-  return join(rootPath, 'sources');
+  return resolveSourcesDir(rootPath);
 }
 
 /**
@@ -96,11 +99,13 @@ export function getWorkspaceSessionsPath(rootPath: string): string {
 }
 
 /**
- * Get path to workspace skills directory
+ * Get path to workspace skills directory.
+ * Returns the custom `skillsDirectory` from the workspace config if set,
+ * otherwise {rootPath}/skills/.
  * @param rootPath - Absolute path to workspace root folder
  */
 export function getWorkspaceSkillsPath(rootPath: string): string {
-  return join(rootPath, 'skills');
+  return resolveSkillsDir(rootPath);
 }
 
 // ============================================================
@@ -121,6 +126,12 @@ export function loadWorkspaceConfig(rootPath: string): WorkspaceConfig | null {
     // Expand path variables in defaults for portability
     if (config.defaults?.workingDirectory) {
       config.defaults.workingDirectory = expandPath(config.defaults.workingDirectory);
+    }
+    if (config.defaults?.skillsDirectory) {
+      config.defaults.skillsDirectory = expandWorkspaceDirPath(config.defaults.skillsDirectory, rootPath);
+    }
+    if (config.defaults?.sourcesDirectory) {
+      config.defaults.sourcesDirectory = expandWorkspaceDirPath(config.defaults.sourcesDirectory, rootPath);
     }
 
     // Compatibility: accept canonical or legacy permission mode names on read
@@ -171,6 +182,18 @@ export function saveWorkspaceConfig(rootPath: string, config: WorkspaceConfig): 
     storageConfig.defaults = {
       ...storageConfig.defaults,
       workingDirectory: toPortablePath(storageConfig.defaults.workingDirectory),
+    };
+  }
+  if (storageConfig.defaults?.skillsDirectory) {
+    storageConfig.defaults = {
+      ...storageConfig.defaults,
+      skillsDirectory: toPortablePath(storageConfig.defaults.skillsDirectory),
+    };
+  }
+  if (storageConfig.defaults?.sourcesDirectory) {
+    storageConfig.defaults = {
+      ...storageConfig.defaults,
+      sourcesDirectory: toPortablePath(storageConfig.defaults.sourcesDirectory),
     };
   }
 
@@ -339,14 +362,14 @@ export function createWorkspaceAtPath(
     updatedAt: now,
   };
 
+  // Save config FIRST so directory path resolvers can read any custom directories
+  saveWorkspaceConfig(rootPath, config);
+
   // Create workspace directory structure
-  mkdirSync(rootPath, { recursive: true });
+  // rootPath is already created by saveWorkspaceConfig
   mkdirSync(getWorkspaceSourcesPath(rootPath), { recursive: true });
   mkdirSync(getWorkspaceSessionsPath(rootPath), { recursive: true });
   mkdirSync(getWorkspaceSkillsPath(rootPath), { recursive: true });
-
-  // Save config
-  saveWorkspaceConfig(rootPath, config);
 
   // Initialize status configuration with defaults
   saveStatusConfig(rootPath, getDefaultStatusConfig());
