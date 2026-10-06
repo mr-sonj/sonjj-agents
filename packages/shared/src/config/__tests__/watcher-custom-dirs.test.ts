@@ -17,6 +17,8 @@ let root: string;
 let watcher: ConfigWatcher | null;
 let listEvents: string[][];
 let skillEvents: Array<{ slug: string; name: string | null }>;
+let sourceEvents: string[];
+let validationEvents: string[];
 
 function writeSkill(dir: string, slug: string, name: string = slug): void {
   mkdirSync(join(dir, slug), { recursive: true });
@@ -38,10 +40,12 @@ function workspaceSlugs(skills: LoadedSkill[]): string[] {
   return skills.filter(s => s.source === 'workspace').map(s => s.slug).sort();
 }
 
-function startWatcher(): ConfigWatcher {
-  watcher = new ConfigWatcher(root, {
+function startWatcher(workspaceRoot: string = root): ConfigWatcher {
+  watcher = new ConfigWatcher(workspaceRoot, {
     onSkillsListChange: (skills) => listEvents.push(workspaceSlugs(skills)),
     onSkillChange: (slug, skill) => skillEvents.push({ slug, name: skill?.metadata.name ?? null }),
+    onSourceChange: (slug) => sourceEvents.push(slug),
+    onValidationError: (file) => validationEvents.push(file),
   });
   watcher.start();
   return watcher;
@@ -64,6 +68,8 @@ beforeEach(() => {
   watcher = null;
   listEvents = [];
   skillEvents = [];
+  sourceEvents = [];
+  validationEvents = [];
 });
 
 afterEach(() => {
@@ -107,6 +113,56 @@ describe('ConfigWatcher custom skills directory', () => {
     writeSkill(custom, 'fresh-skill');
 
     expect(await waitFor(() => listEvents.some(l => l.includes('fresh-skill')))).toBe(true);
+  });
+
+  it('ignores changes in the old default skills folder', async () => {
+    const custom = join(tempDir, 'custom-skills');
+    mkdirSync(custom);
+    setSkillsDirectory(custom);
+    startWatcher();
+    await Bun.sleep(200);
+
+    writeSkill(join(root, 'skills'), 'ghost');
+    await Bun.sleep(400);
+
+    expect(listEvents).toEqual([]);
+    expect(skillEvents).toEqual([]);
+  });
+
+  it('ignores changes in the old default sources folder', async () => {
+    const custom = join(tempDir, 'custom-sources');
+    mkdirSync(custom);
+    setDefaults({ sourcesDirectory: custom });
+    startWatcher();
+    await Bun.sleep(200);
+
+    const oldSource = join(root, 'sources', 'ghost');
+    mkdirSync(oldSource, { recursive: true });
+    writeFileSync(join(oldSource, 'config.json'), '{}');
+    await Bun.sleep(400);
+
+    expect(sourceEvents).toEqual([]);
+    expect(validationEvents).toEqual([]);
+  });
+
+  it('still reloads the default skills folder when the setting names it with a trailing slash', async () => {
+    setSkillsDirectory(join(root, 'skills') + '/');
+    startWatcher();
+    await Bun.sleep(200);
+    writeSkill(join(root, 'skills'), 'fresh-skill');
+
+    expect(await waitFor(() => skillEvents.some(e => e.slug === 'fresh-skill'))).toBe(true);
+  });
+
+  it('still reloads the default skills folder when the workspace is opened through a symlink', async () => {
+    const link = join(tempDir, 'workspace-link');
+    symlinkSync(root, link, linkType);
+    setSkillsDirectory(join(root, 'skills'));
+    startWatcher(link);
+    await Bun.sleep(200);
+    writeSkill(join(root, 'skills'), 'fresh-skill');
+
+    expect(await waitFor(() => skillEvents.some(e => e.slug === 'fresh-skill'))).toBe(true);
   });
 
   it('watches only folders outside the workspace tree with extra watchers', () => {

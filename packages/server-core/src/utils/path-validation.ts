@@ -127,7 +127,7 @@ export function isValidWorkspaceRootPath(
  * Validate a custom skills or sources folder for a workspace.
  * Must be an existing directory (see isValidWorkingDirectory) that is neither the
  * workspace folder nor one of its parents (the watcher would then watch the whole
- * tree), nor the folder the other setting already uses. Symlinks are resolved first.
+ * tree), and must not overlap the other setting's folder. Symlinks are resolved first.
  */
 export function isValidCustomDirectory(
   path: string,
@@ -147,7 +147,7 @@ export function isValidCustomDirectory(
   if (root.startsWith(dir.endsWith(sep) ? dir : dir + sep)) {
     return { valid: false, reason: 'Cannot be a parent of the workspace folder.' }
   }
-  if (otherDirectory && isSameDirectory(otherDirectory, dir)) {
+  if (otherDirectory && directoriesOverlap(otherDirectory, dir)) {
     return SAME_FOLDER
   }
 
@@ -156,7 +156,7 @@ export function isValidCustomDirectory(
 
 /**
  * Validate a new skillsDirectory/sourcesDirectory setting. `path` undefined means going
- * back to `defaultDirectory`, which must still differ from the folder the other setting
+ * back to `defaultDirectory`, which must not overlap the folder the other setting
  * uses; a custom path gets the full isValidCustomDirectory check.
  */
 export function isValidDirectorySetting(
@@ -166,12 +166,12 @@ export function isValidDirectorySetting(
   otherDirectory: string
 ): PathValidationResult {
   if (path === undefined) {
-    return isSameDirectory(defaultDirectory, otherDirectory) ? SAME_FOLDER : { valid: true }
+    return directoriesOverlap(defaultDirectory, otherDirectory) ? SAME_FOLDER : { valid: true }
   }
   return isValidCustomDirectory(path, workspaceRoot, otherDirectory)
 }
 
-const SAME_FOLDER: PathValidationResult = { valid: false, reason: 'Skills and sources cannot use the same folder.' }
+const SAME_FOLDER: PathValidationResult = { valid: false, reason: 'Skills and sources directories cannot overlap.' }
 
 function realpathOrResolve(path: string): string {
   try {
@@ -181,6 +181,8 @@ function realpathOrResolve(path: string): string {
   }
 }
 
-function isSameDirectory(a: string, b: string): boolean {
-  return realpathOrResolve(a) === realpathOrResolve(b)
+function directoriesOverlap(a: string, b: string): boolean {
+  const first = realpathOrResolve(a)
+  const second = realpathOrResolve(b)
+  return first === second || first.startsWith(second + sep) || second.startsWith(first + sep)
 }

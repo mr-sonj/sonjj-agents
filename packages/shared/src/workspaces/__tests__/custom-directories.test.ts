@@ -12,6 +12,7 @@ import {
   getWorkspaceSkillsPath,
   getWorkspaceSourcesPath,
   loadWorkspaceConfig,
+  saveWorkspaceConfig,
 } from '../storage.ts';
 
 let tempDir: string;
@@ -59,7 +60,10 @@ describe('custom skills/sources directories', () => {
     writeDefaults({ skillsDirectory: 'my-skills' });
 
     expect(getWorkspaceSkillsPath(root)).toBe(join(root, 'my-skills'));
-    expect(loadWorkspaceConfig(root)?.defaults?.skillsDirectory).toBe(join(root, 'my-skills'));
+    expect(loadWorkspaceConfig(root)?.defaults?.skillsDirectory).toBe('my-skills');
+    const config = loadWorkspaceConfig(root)!;
+    saveWorkspaceConfig(root, { ...config, name: 'Renamed' });
+    expect(JSON.parse(readFileSync(join(root, 'config.json'), 'utf-8')).defaults.skillsDirectory).toBe('my-skills');
   });
 
   it('expands ~ and $HOME', () => {
