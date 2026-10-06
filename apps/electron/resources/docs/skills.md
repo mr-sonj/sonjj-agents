@@ -78,11 +78,10 @@ A workspace can load skills from more folders with `extraSkillDirs` in its `conf
   directory or `~/.agents/skills`, which load as their own levels.
 - These skills are marked **extra** and cannot be deleted or sent to another workspace from the app;
   editing one changes the file in its own folder. New skills still go in the workspace skills directory.
-- Changing the setting refreshes the skills list at once. Extra folders are not watched (like
-  `~/.agents/skills`) and the skills list is cached for up to five minutes: a skill added or edited
-  there later reaches the agent within about five minutes, and the app's skills list the next time
-  it loads skills after that (switching workspace, restarting the app). A change to the setting or
-  to the workspace skills directory shows it at once.
+- Changing the setting refreshes the skills list at once, and the extra folders are watched: a
+  skill added, edited or removed there shows in the skills list and reaches the agent within about
+  a second. A folder that contains the workspace is not watched. A listed folder that does not
+  exist yet is picked up the next time the setting changes or the app (or server) restarts.
 
 ## SKILL.md Format
 
