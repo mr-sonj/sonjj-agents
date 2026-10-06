@@ -237,11 +237,14 @@ export class ConfigWatcher {
 
   // A custom sources/skills folder or symlinked source/skill folder is reported under the
   // prefix it stands for ('skills', 'skills/my-skill'). A folder no watcher covers gets its
-  // own; one inside a watched tree is not watched twice: the events of the watcher `base`
-  // ('' = the workspace watcher, else an extra watcher's prefix) under `from` are repeated
-  // under the prefix instead.
+  // own; one inside a watched tree is not watched twice. Whichever watcher reports a change,
+  // it is resolved to the real file and repeated under every prefix whose folder holds it:
+  // on Linux a folder reached through several paths (a symlink the workspace watcher
+  // follows, two links to one target) reports under just one of them.
   private extraWatchers: Map<string, { dir: string; watcher: FSWatcher }> = new Map();
-  private routes: Map<string, { base: string; from: string }> = new Map();
+  private aliases: Array<{ prefix: string; dir: string }> = [];
+  // workspaceDir with symlinks resolved, as the folders above are
+  private realWorkspaceDir: string;
   // 'sources'/'skills' while that setting points away from the default folder in the workspace
   private movedDefaults: Set<string> = new Set();
 
@@ -270,6 +273,7 @@ export class ConfigWatcher {
     }
     this.sourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
     this.skillsDir = getWorkspaceSkillsPath(this.workspaceDir);
+    this.realWorkspaceDir = this.workspaceDir;
     this.extraSkillsDirs = getWorkspaceExtraSkillsPaths(this.workspaceDir).join('\n');
   }
 
@@ -366,7 +370,7 @@ export class ConfigWatcher {
    */
   notifyFileChange(relativePath: string): void {
     if (!this.isRunning) return;
-    this.handleWorkspaceFileChange(relativePath, 'change');
+    this.handleChangeEverywhere(relativePath, this.toRealPath(relativePath), 'change');
   }
 
   /**
@@ -396,7 +400,7 @@ export class ConfigWatcher {
       watcher.close();
     }
     this.extraWatchers.clear();
-    this.routes.clear();
+    this.aliases = [];
     this.movedDefaults.clear();
 
     this.knownSources.clear();
@@ -448,12 +452,12 @@ export class ConfigWatcher {
         // Normalize path separators
         const normalizedPath = filename.replace(/\\/g, '/');
         // The workspace watcher still sees a default folder the setting moved away
-        // from; the active folder is reported through its route or extra watcher.
-        if (!this.movedDefaults.has(normalizedPath.split('/', 1)[0]!)) {
-          this.handleWorkspaceFileChange(normalizedPath, eventType);
+        // from; that change only counts for a prefix whose folder lies inside it.
+        if (this.movedDefaults.has(normalizedPath.split('/', 1)[0]!)) {
+          this.handleChangeEverywhere(null, join(this.realWorkspaceDir, normalizedPath), eventType);
+        } else {
+          this.handleChangeEverywhere(normalizedPath, this.toRealPath(normalizedPath), eventType);
         }
-
-        this.repeatRoutedChange('', normalizedPath, eventType);
       });
 
       this.watchers.push(watcher);
@@ -477,9 +481,8 @@ export class ConfigWatcher {
     try {
       const watcher = watch(dir, { recursive: true }, (eventType, filename) => {
         if (!filename) return;
-        const normalizedPath = filename.replace(/\\/g, '/');
-        this.handleWorkspaceFileChange(`${prefix}/${normalizedPath}`, eventType);
-        this.repeatRoutedChange(prefix, normalizedPath, eventType);
+        const path = `${prefix}/${filename.replace(/\\/g, '/')}`;
+        this.handleChangeEverywhere(path, this.toRealPath(path), eventType);
       });
       this.extraWatchers.set(prefix, { dir, watcher });
       debug('[ConfigWatcher] Watching', dir, 'as', prefix);
@@ -494,26 +497,47 @@ export class ConfigWatcher {
   }
 
   /**
-   * Repeat a change seen by the watcher `base` ('' = workspace watcher) under every
-   * prefix routed through it.
+   * The real file a workspace-relative path names, going through the custom folder or
+   * symlinked entry its longest matching prefix stands for (`skills/foo/SKILL.md` under a
+   * link `skills/foo` → `<target>/SKILL.md`).
    */
-  private repeatRoutedChange(base: string, path: string, eventType: string): void {
-    for (const [prefix, route] of this.routes) {
-      if (route.base !== base) continue;
-      if (!route.from) {
-        // Another link to the folder this watcher watches
-        this.handleWorkspaceFileChange(`${prefix}/${path}`, eventType);
-      } else if (path.startsWith(`${route.from}/`)) {
-        this.handleWorkspaceFileChange(prefix + path.slice(route.from.length), eventType);
+  private toRealPath(path: string): string {
+    let best: { prefix: string; dir: string } | undefined;
+    for (const alias of this.aliases) {
+      if ((path === alias.prefix || path.startsWith(`${alias.prefix}/`)) &&
+          (!best || alias.prefix.length > best.prefix.length)) {
+        best = alias;
       }
+    }
+    return best
+      ? join(best.dir, path.slice(best.prefix.length))
+      : join(this.realWorkspaceDir, path);
+  }
+
+  /**
+   * Handle a change reported as `path` (null: a path no prefix stands for) and repeat it
+   * under the workspace and every prefix whose folder holds `realPath`.
+   */
+  private handleChangeEverywhere(path: string | null, realPath: string, eventType: string): void {
+    if (path) this.handleWorkspaceFileChange(path, eventType);
+
+    // '' = the workspace itself (an event under a link `skills/foo` → `skills/bar` also reloads `bar`)
+    for (const { prefix, dir } of [{ prefix: '', dir: this.realWorkspaceDir }, ...this.aliases]) {
+      if (!isWithin(realPath, dir)) continue;
+      const rest = relative(dir, realPath).split(sep).join('/');
+      // Not the default folder the setting moved away from
+      if (!prefix && this.movedDefaults.has(rest.split('/', 1)[0]!)) continue;
+      const alias = prefix && rest ? `${prefix}/${rest}` : prefix || rest;
+      if (alias && alias !== path) this.handleWorkspaceFileChange(alias, eventType);
     }
   }
 
   /**
-   * Bring the extra watchers and routes in line with the folders on disk: the sources and
+   * Bring the extra watchers and aliases in line with the folders on disk: the sources and
    * skills folders unless they are the defaults in the workspace, plus every symlinked
-   * source/skill folder, whose contents fs.watch does not report through the link. Both
-   * kinds are placed together because one can sit inside a tree the other watches.
+   * source/skill folder, whose contents fs.watch on macOS and Windows does not report
+   * through the link. Both kinds are placed together because one can sit inside a tree the
+   * other watches.
    */
   private syncExtraWatchers(): void {
     const workspace = realpathOrSelf(this.workspaceDir);
@@ -542,28 +566,22 @@ export class ConfigWatcher {
       }
     }
 
-    // Shortest first, so a folder containing another is watched and the inner one routed
+    // Shortest first, so a folder containing another is watched and the inner one covered by it
     candidates.sort((a, b) => a.target.length - b.target.length);
 
     const watches = new Map<string, string>(); // prefix -> directory to watch
-    const routes = new Map<string, { base: string; from: string }>();
+    const aliases: Array<{ prefix: string; dir: string }> = [];
     for (const { prefix, target } of candidates) {
-      const bases: Array<[string, string]> = [['', workspace], ...watches];
-      const covering = bases.find(([, dir]) => isWithin(target, dir));
-      if (covering) {
-        const [base, dir] = covering;
-        const from = relative(dir, target).split(sep).join('/');
-        // The path the covering watcher already reports this folder under
-        const reported = base && from ? `${base}/${from}` : base || from;
-        // Skip a link to the workspace itself, and routes that would repeat `reported`
-        if (reported && reported !== prefix) routes.set(prefix, { base, from });
-      } else if (!isWithin(workspace, target)) {
-        // Never watch a folder that contains the workspace
-        watches.set(prefix, target);
-      }
+      // Never watch or repeat events into a folder that contains the workspace (a link to
+      // the workspace itself)
+      if (isWithin(workspace, target)) continue;
+      aliases.push({ prefix, dir: target });
+      const covered = [workspace, ...watches.values()].some(dir => isWithin(target, dir));
+      if (!covered) watches.set(prefix, target);
     }
 
-    this.routes = routes;
+    this.realWorkspaceDir = workspace;
+    this.aliases = aliases;
     this.movedDefaults = movedDefaults;
     for (const [prefix, { dir }] of Array.from(this.extraWatchers)) {
       if (watches.get(prefix) !== dir) this.unwatchExtraDir(prefix);
