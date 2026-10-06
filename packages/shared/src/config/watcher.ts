@@ -17,7 +17,7 @@
  */
 
 import { watch, existsSync, readdirSync, statSync, readFileSync, mkdirSync, realpathSync } from 'fs';
-import { join, dirname, basename, relative, isAbsolute, sep } from 'path';
+import { join, dirname, basename, relative, resolve, isAbsolute, sep } from 'path';
 import { platform } from 'os';
 import type { FSWatcher } from 'fs';
 import { CONFIG_DIR } from './paths.ts';
@@ -242,6 +242,8 @@ export class ConfigWatcher {
   // under the prefix instead.
   private extraWatchers: Map<string, { dir: string; watcher: FSWatcher }> = new Map();
   private routes: Map<string, { base: string; from: string }> = new Map();
+  // 'sources'/'skills' while that setting points away from the default folder in the workspace
+  private movedDefaults: Set<string> = new Set();
 
   // Track LLM connections for change detection (JSON string for deep comparison)
   private lastLlmConnectionsHash: string = '';
@@ -392,6 +394,7 @@ export class ConfigWatcher {
     }
     this.extraWatchers.clear();
     this.routes.clear();
+    this.movedDefaults.clear();
 
     this.knownSources.clear();
     this.knownSkills.clear();
@@ -441,7 +444,11 @@ export class ConfigWatcher {
 
         // Normalize path separators
         const normalizedPath = filename.replace(/\\/g, '/');
-        this.handleWorkspaceFileChange(normalizedPath, eventType);
+        // The workspace watcher still sees a default folder the setting moved away
+        // from; the active folder is reported through its route or extra watcher.
+        if (!this.movedDefaults.has(normalizedPath.split('/', 1)[0]!)) {
+          this.handleWorkspaceFileChange(normalizedPath, eventType);
+        }
 
         this.repeatRoutedChange('', normalizedPath, eventType);
       });
@@ -508,10 +515,14 @@ export class ConfigWatcher {
   private syncExtraWatchers(): void {
     const workspace = realpathOrSelf(this.workspaceDir);
     const candidates: Array<{ prefix: string; target: string }> = [];
+    const movedDefaults = new Set<string>();
 
     for (const [kind, dir] of [['sources', this.sourcesDir], ['skills', this.skillsDir]] as const) {
-      if (dir !== join(this.workspaceDir, kind) && existsSync(dir)) {
-        candidates.push({ prefix: kind, target: realpathOrSelf(dir) });
+      // Compare real folders: the setting can name the default one another way
+      // (a trailing slash, the workspace opened through a symlink)
+      if (realpathOrSelf(resolve(dir)) !== realpathOrSelf(join(this.workspaceDir, kind))) {
+        movedDefaults.add(kind);
+        if (existsSync(dir)) candidates.push({ prefix: kind, target: realpathOrSelf(dir) });
       }
       try {
         for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -550,6 +561,7 @@ export class ConfigWatcher {
     }
 
     this.routes = routes;
+    this.movedDefaults = movedDefaults;
     for (const [prefix, { dir }] of Array.from(this.extraWatchers)) {
       if (watches.get(prefix) !== dir) this.unwatchExtraDir(prefix);
     }
