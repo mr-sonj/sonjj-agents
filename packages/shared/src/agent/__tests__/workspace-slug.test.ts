@@ -278,4 +278,14 @@ describe('qualifySkillName with filesystem resolution', () => {
     expect(result.modified).toBe(true)
     expect(result.input).toEqual({ skill: 'my-workspace:ws-only' })
   })
+
+  it('resolves a skill from an extra skill folder to .agents plugin', () => {
+    const extraDir = join(testDir, 'extra-skills')
+    mkdirSync(join(extraDir, 'extra-only'), { recursive: true })
+    writeFileSync(join(extraDir, 'extra-only', 'SKILL.md'), '---\nname: Extra Only\ndescription: test\n---\n')
+    writeFileSync(join(workspaceRoot, 'config.json'), JSON.stringify({ defaults: { extraSkillDirs: [extraDir] } }))
+
+    const result = qualifySkillName({ skill: 'extra-only' }, workspaceSlug, workspaceRoot, projectDir)
+    expect(result.input).toEqual({ skill: `${AGENTS_PLUGIN_NAME}:extra-only` })
+  })
 })

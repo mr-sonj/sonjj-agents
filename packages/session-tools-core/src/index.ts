@@ -86,6 +86,7 @@ export {
 export {
   resolveSourcesDir,
   resolveSkillsDir,
+  resolveExtraSkillDirs,
   expandWorkspaceDirPath,
 } from './workspace-dirs.ts';
 

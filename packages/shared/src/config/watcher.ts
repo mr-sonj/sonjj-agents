@@ -41,7 +41,7 @@ import {
   downloadSourceIcon,
 } from '../sources/storage.ts';
 import { permissionsConfigCache, getAppPermissionsDir } from '../agent/permissions-config.ts';
-import { getWorkspacePath, getWorkspaceSourcesPath, getWorkspaceSkillsPath } from '../workspaces/storage.ts';
+import { getWorkspacePath, getWorkspaceSourcesPath, getWorkspaceSkillsPath, getWorkspaceExtraSkillsPaths } from '../workspaces/storage.ts';
 import type { LoadedSkill } from '../skills/types.ts';
 import { loadWorkspacePages } from '../pages/storage.ts';
 import { loadSkill, loadAllSkills, invalidateSkillsCache, skillNeedsIconDownload, downloadSkillIcon } from '../skills/storage.ts';
@@ -252,6 +252,8 @@ export class ConfigWatcher {
   private workspaceDir: string;
   private sourcesDir: string;
   private skillsDir: string;
+  // Existing folders listed in extraSkillDirs, one per line; not watched, only compared on refresh
+  private extraSkillsDirs: string;
 
   constructor(workspaceIdOrPath: string, callbacks: ConfigWatcherCallbacks) {
     this.callbacks = callbacks;
@@ -268,6 +270,7 @@ export class ConfigWatcher {
     }
     this.sourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
     this.skillsDir = getWorkspaceSkillsPath(this.workspaceDir);
+    this.extraSkillsDirs = getWorkspaceExtraSkillsPaths(this.workspaceDir).join('\n');
   }
 
   /**
@@ -577,13 +580,15 @@ export class ConfigWatcher {
 
   /**
    * Re-read the sources/skills folders from the workspace config and, for each one that
-   * moved, rescan it, re-point its watchers and broadcast its new list. Runs when the
+   * moved, rescan it, re-point its watchers and broadcast its new list; a change in the
+   * extra skill folders (extraSkillDirs) also broadcasts the skills list. Runs when the
    * workspace config.json changes; SessionManager also calls it right after the setting
    * is saved.
    */
   refreshDirectoryPaths(): void {
     const newSourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
     const newSkillsDir = getWorkspaceSkillsPath(this.workspaceDir);
+    const newExtraSkillsDirs = getWorkspaceExtraSkillsPaths(this.workspaceDir).join('\n');
 
     if (newSourcesDir !== this.sourcesDir) {
       debug('[ConfigWatcher] Sources directory changed:', this.sourcesDir, '->', newSourcesDir);
@@ -594,12 +599,22 @@ export class ConfigWatcher {
       this.callbacks.onSourcesListChange?.(loadWorkspaceSources(this.workspaceDir));
     }
 
-    if (newSkillsDir !== this.skillsDir) {
+    const skillsDirChanged = newSkillsDir !== this.skillsDir;
+    if (skillsDirChanged) {
       debug('[ConfigWatcher] Skills directory changed:', this.skillsDir, '->', newSkillsDir);
       this.skillsDir = newSkillsDir;
       this.knownSkills.clear();
       this.scanSkills();
       this.syncExtraWatchers();
+    }
+
+    const extraSkillsDirsChanged = newExtraSkillsDirs !== this.extraSkillsDirs;
+    if (extraSkillsDirsChanged) {
+      debug('[ConfigWatcher] Extra skill folders changed:', newExtraSkillsDirs || '(none)');
+      this.extraSkillsDirs = newExtraSkillsDirs;
+    }
+
+    if (skillsDirChanged || extraSkillsDirsChanged) {
       invalidateSkillsCache();
       this.callbacks.onSkillsListChange?.(loadAllSkills(this.workspaceDir));
     }
