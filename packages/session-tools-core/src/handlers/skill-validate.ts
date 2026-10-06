@@ -2,7 +2,7 @@
  * Skill Validate Handler
  *
  * Validates a skill's SKILL.md file for correct format and required fields.
- * Resolves skills from all three tiers: project > workspace > global.
+ * Resolves skills from every tier: project > workspace > extra folders > global.
  *
  * The handler resolves the session's workingDirectory on demand from the
  * persisted session.jsonl header — no construction-time propagation needed.
@@ -15,7 +15,7 @@ import type { SessionToolContext } from '../context.ts';
 import type { ToolResult } from '../types.ts';
 import { errorResponse } from '../response.ts';
 import { resolveSessionWorkingDirectory } from '../source-helpers.ts';
-import { resolveSkillsDir } from '../workspace-dirs.ts';
+import { resolveExtraSkillDirs, resolveSkillsDir } from '../workspace-dirs.ts';
 import {
   validateSlug,
   validateSkillContent,
@@ -27,35 +27,24 @@ export interface SkillValidateArgs {
 }
 
 /**
- * Resolve the SKILL.md path by checking all three tiers (project > workspace > global).
- * Returns the first match, or null if not found anywhere.
+ * Every place the skill's SKILL.md may be, highest priority first:
+ * 1. Project: {projectRoot}/.agents/skills/{slug}/SKILL.md
+ * 2. Workspace: {workspace}/skills/{slug}/SKILL.md, or the custom skillsDirectory
+ * 3. Extra: each folder from extraSkillDirs, in the order listed
+ * 4. Global: ~/.agents/skills/{slug}/SKILL.md
  */
-function resolveSkillMdPath(
+function skillMdCandidates(
   ctx: SessionToolContext,
   slug: string,
   workingDirectory: string | undefined
-): { path: string; tier: string } | null {
-  // 1. Project-level (highest priority): {projectRoot}/.agents/skills/{slug}/SKILL.md
-  if (workingDirectory) {
-    const projectPath = join(workingDirectory, '.agents', 'skills', slug, 'SKILL.md');
-    if (ctx.fs.exists(projectPath)) {
-      return { path: projectPath, tier: 'project' };
-    }
-  }
-
-  // 2. Workspace-level (medium priority): {workspace}/skills/{slug}/SKILL.md, or the custom skillsDirectory
-  const workspacePath = join(resolveSkillsDir(ctx.workspacePath), slug, 'SKILL.md');
-  if (ctx.fs.exists(workspacePath)) {
-    return { path: workspacePath, tier: 'workspace' };
-  }
-
-  // 3. Global-level (lowest priority): ~/.agents/skills/{slug}/SKILL.md
-  const globalPath = join(homedir(), '.agents', 'skills', slug, 'SKILL.md');
-  if (ctx.fs.exists(globalPath)) {
-    return { path: globalPath, tier: 'global' };
-  }
-
-  return null;
+): Array<{ path: string; tier: string }> {
+  const dirs: Array<{ dir: string; tier: string }> = [
+    ...(workingDirectory ? [{ dir: join(workingDirectory, '.agents', 'skills'), tier: 'project' }] : []),
+    { dir: resolveSkillsDir(ctx.workspacePath), tier: 'workspace' },
+    ...resolveExtraSkillDirs(ctx.workspacePath).map(dir => ({ dir, tier: 'extra' })),
+    { dir: join(homedir(), '.agents', 'skills'), tier: 'global' },
+  ];
+  return dirs.map(({ dir, tier }) => ({ path: join(dir, slug, 'SKILL.md'), tier }));
 }
 
 /**
@@ -63,7 +52,7 @@ function resolveSkillMdPath(
  *
  * 1. Validate slug format
  * 2. Resolve workingDirectory from ctx or session header (graceful fallback)
- * 3. Resolve SKILL.md from all three tiers (project > workspace > global)
+ * 3. Resolve SKILL.md from every tier (project > workspace > extra > global)
  * 4. Read and validate content (frontmatter + body)
  * 5. Return validation result with warnings if project tier was skipped
  */
@@ -86,14 +75,11 @@ export async function handleSkillValidate(
   const workingDirectory = ctx.workingDirectory
     ?? resolveSessionWorkingDirectory(ctx.workspacePath, ctx.sessionId);
 
-  // Resolve SKILL.md from all three tiers
-  const resolved = resolveSkillMdPath(ctx, skillSlug, workingDirectory);
+  // Resolve SKILL.md from every tier, first match wins
+  const candidates = skillMdCandidates(ctx, skillSlug, workingDirectory);
+  const resolved = candidates.find(candidate => ctx.fs.exists(candidate.path));
   if (!resolved) {
-    const searchedPaths = [
-      workingDirectory ? `  - ${join(workingDirectory, '.agents', 'skills', skillSlug, 'SKILL.md')} (project)` : null,
-      `  - ${join(resolveSkillsDir(ctx.workspacePath), skillSlug, 'SKILL.md')} (workspace)`,
-      `  - ${join(homedir(), '.agents', 'skills', skillSlug, 'SKILL.md')} (global)`,
-    ].filter(Boolean).join('\n');
+    const searchedPaths = candidates.map(({ path, tier }) => `  - ${path} (${tier})`).join('\n');
 
     const warning = !workingDirectory
       ? '\n\nNote: Project-level skills (.agents/skills/) were not checked — working directory could not be resolved.'

@@ -1,5 +1,6 @@
 import { realpathSync, statSync, type Stats } from 'fs'
 import { dirname, resolve, sep, win32 as pathWin32 } from 'path'
+import { getExtraSkillsPath } from '@craft-agent/shared/workspaces'
 
 export interface PathValidationResult {
   valid: boolean
@@ -169,6 +170,46 @@ export function isValidDirectorySetting(
     return directoriesOverlap(defaultDirectory, otherDirectory) ? SAME_FOLDER : { valid: true }
   }
   return isValidCustomDirectory(path, workspaceRoot, otherDirectory)
+}
+
+/**
+ * Validate a new `extraSkillDirs` entry: it must be an existing folder (`~` is the home
+ * folder, a relative entry starts at the workspace root).
+ */
+export function isValidExtraSkillDir(entry: string, workspaceRoot: string): PathValidationResult {
+  return isValidWorkingDirectory(getExtraSkillsPath(workspaceRoot, entry))
+}
+
+/**
+ * The `extraSkillDirs` entries saved in a workspace config. A hand-edited config may hold
+ * anything there, so only path entries are kept, as written.
+ */
+export function savedExtraSkillDirs(value: unknown): string[] {
+  return Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === 'string') : []
+}
+
+/**
+ * Clean up a new `extraSkillDirs` list (trim, drop blanks and repeats; `dirs` is undefined
+ * when nothing is left) and check each entry not in `saved` with isValidExtraSkillDir.
+ * Saved entries stay as they are, so a folder that went away does not block other edits.
+ */
+export function validateExtraSkillDirs(
+  value: unknown,
+  workspaceRoot: string,
+  saved: readonly string[] = []
+): PathValidationResult & { dirs?: string[] } {
+  if (value === undefined || value === null) return { valid: true, dirs: undefined }
+  if (!Array.isArray(value) || value.some(entry => typeof entry !== 'string')) {
+    return { valid: false, reason: 'Extra skill folders must be a list of paths.' }
+  }
+
+  const dirs = Array.from(new Set((value as string[]).map(entry => entry.trim()).filter(Boolean)))
+  for (const entry of dirs) {
+    if (saved.includes(entry)) continue
+    const validation = isValidExtraSkillDir(entry, workspaceRoot)
+    if (!validation.valid) return validation
+  }
+  return { valid: true, dirs: dirs.length > 0 ? dirs : undefined }
 }
 
 const SAME_FOLDER: PathValidationResult = { valid: false, reason: 'Skills and sources directories cannot overlap.' }
