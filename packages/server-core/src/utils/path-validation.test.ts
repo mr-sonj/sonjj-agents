@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'fs'
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import type { Stats } from 'fs'
@@ -7,6 +7,8 @@ import {
   validatePathFormat,
   isValidWorkingDirectory,
   isValidWorkspaceRootPath,
+  isValidCustomDirectory,
+  isValidDirectorySetting,
 } from './path-validation'
 
 function directoryStats(): Stats {
@@ -140,5 +142,104 @@ describe('isValidWorkspaceRootPath', () => {
       valid: false,
       reason: 'Parent path is not a directory: C:\\workspaces',
     })
+  })
+})
+
+describe('isValidCustomDirectory', () => {
+  function withDirs(run: (dirs: { base: string; workspace: string; outside: string }) => void) {
+    const base = mkdtempSync(join(tmpdir(), 'custom-dir-validation-'))
+    const workspace = join(base, 'workspace')
+    const outside = join(base, 'outside')
+    mkdirSync(workspace)
+    mkdirSync(outside)
+    try {
+      run({ base, workspace, outside })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  }
+
+  it('accepts an existing directory outside the workspace', () => {
+    withDirs(({ workspace, outside }) => {
+      expect(isValidCustomDirectory(outside, workspace)).toEqual({ valid: true })
+    })
+  })
+
+  it('accepts an existing directory inside the workspace', () => {
+    withDirs(({ workspace }) => {
+      const inside = join(workspace, 'data', 'skills')
+      mkdirSync(inside, { recursive: true })
+      expect(isValidCustomDirectory(inside, workspace)).toEqual({ valid: true })
+    })
+  })
+
+  it('rejects a relative or missing path', () => {
+    withDirs(({ workspace, base }) => {
+      expect(isValidCustomDirectory('skills', workspace).valid).toBe(false)
+      expect(isValidCustomDirectory(join(base, 'missing'), workspace).valid).toBe(false)
+    })
+  })
+
+  it('rejects the workspace folder itself, also through a symlink', () => {
+    withDirs(({ workspace, base }) => {
+      const alias = join(base, 'alias')
+      symlinkSync(workspace, alias, process.platform === 'win32' ? 'dir' : undefined)
+      expect(isValidCustomDirectory(workspace, workspace)).toEqual({
+        valid: false,
+        reason: 'Cannot be the workspace folder itself.',
+      })
+      expect(isValidCustomDirectory(alias, workspace).valid).toBe(false)
+    })
+  })
+
+  it('rejects a folder that contains the workspace', () => {
+    withDirs(({ workspace, base }) => {
+      const expected = { valid: false, reason: 'Cannot be a parent of the workspace folder.' }
+      expect(isValidCustomDirectory(base, workspace)).toEqual(expected)
+      expect(isValidCustomDirectory('/', workspace)).toEqual(expected)
+    })
+  })
+
+  it('rejects the folder already used by the other setting', () => {
+    withDirs(({ workspace, outside }) => {
+      expect(isValidCustomDirectory(outside, workspace, outside)).toEqual({
+        valid: false,
+        reason: 'Skills and sources cannot use the same folder.',
+      })
+    })
+  })
+})
+
+describe('isValidDirectorySetting', () => {
+  it('rejects going back to the default folder when the other setting uses it', () => {
+    const base = mkdtempSync(join(tmpdir(), 'directory-setting-'))
+    try {
+      const workspace = join(base, 'workspace')
+      const defaultSkills = join(workspace, 'skills')
+      mkdirSync(defaultSkills, { recursive: true })
+
+      // sourcesDirectory was set to {workspace}/skills while skills used a custom folder
+      expect(isValidDirectorySetting(undefined, defaultSkills, workspace, defaultSkills)).toEqual({
+        valid: false,
+        reason: 'Skills and sources cannot use the same folder.',
+      })
+      expect(isValidDirectorySetting(undefined, defaultSkills, workspace, join(workspace, 'sources'))).toEqual({ valid: true })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
+  })
+
+  it('checks a custom folder like isValidCustomDirectory', () => {
+    const base = mkdtempSync(join(tmpdir(), 'directory-setting-'))
+    try {
+      const workspace = join(base, 'workspace')
+      mkdirSync(workspace)
+      expect(isValidDirectorySetting(workspace, join(workspace, 'skills'), workspace, join(workspace, 'sources'))).toEqual({
+        valid: false,
+        reason: 'Cannot be the workspace folder itself.',
+      })
+    } finally {
+      rmSync(base, { recursive: true, force: true })
+    }
   })
 })

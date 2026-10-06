@@ -36,7 +36,7 @@ export async function handleRenderTemplate(
     return errorResponse('render_template requires dataPath in context.');
   }
 
-  const sourcePath = join(ctx.workspacePath, 'sources', args.source);
+  const sourcePath = join(ctx.sourcesPath, args.source);
 
   // Validate source exists
   if (!existsSync(sourcePath)) {

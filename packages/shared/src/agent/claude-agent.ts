@@ -1722,6 +1722,7 @@ export class ClaudeAgent extends BaseAgent {
         disallowedTools,
         // No plugins — skills are handled by BaseAgent.chat() via read-before-execute
         // (the model reads SKILL.md files directly, enforced by PrerequisiteManager)
+        // Custom skill paths are resolved via system prompt (getWorkspaceSkillsPath)
         plugins: [],
       };
 
