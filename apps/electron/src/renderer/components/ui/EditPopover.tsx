@@ -96,6 +96,8 @@ export type EditContextKey =
 export interface EditConfig {
   /** Context passed to the agent */
   context: EditContext
+  /** Directory setting to resolve when the prompt is sent. */
+  directorySetting?: 'skillsDirectory' | 'sourcesDirectory'
   /** Example text shown in the popover placeholder */
   example: string
   /** Optional custom placeholder text - overrides the default "Describe what you'd like to change" */
@@ -302,6 +304,7 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
 
   // Add new source/skill contexts - use overridePlaceholder for inspiring, contextual prompts
   'add-source': (location) => ({
+    directorySetting: 'sourcesDirectory',
     context: {
       label: 'Add Source',
       filePath: `${location}/sources/`, // location is the workspace root path
@@ -322,6 +325,7 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
 
   // Filter-specific add-source contexts: user is viewing a filtered list and wants to add that type
   'add-source-api': (location) => ({
+    directorySetting: 'sourcesDirectory',
     context: {
       label: 'Add API',
       filePath: `${location}/sources/`,
@@ -342,6 +346,7 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
   }),
 
   'add-source-mcp': (location) => ({
+    directorySetting: 'sourcesDirectory',
     context: {
       label: 'Add MCP Server',
       filePath: `${location}/sources/`,
@@ -362,6 +367,7 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
   }),
 
   'add-source-local': (location) => ({
+    directorySetting: 'sourcesDirectory',
     context: {
       label: 'Add Local Folder',
       filePath: `${location}/sources/`,
@@ -383,6 +389,7 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
   }),
 
   'add-skill': (location) => ({
+    directorySetting: 'skillsDirectory',
     context: {
       label: 'Add Skill',
       filePath: `${location}/skills/`, // location is the workspace root path
@@ -605,6 +612,7 @@ export interface EditPopoverProps {
   example?: string
   /** Context passed to the new chat session */
   context: EditContext
+  directorySetting?: 'skillsDirectory' | 'sourcesDirectory'
   /** Permission mode for the new session (default: 'allow-all' / canonical: execute for fast execution) */
   permissionMode?: CreateSessionOptions['permissionMode']
   /**
@@ -719,6 +727,7 @@ export function EditPopover({
   trigger,
   example,
   context,
+  directorySetting,
   permissionMode = 'allow-all',
   workingDirectory = 'none', // Default to session folder for config edits
   model,
@@ -739,6 +748,19 @@ export function EditPopover({
   const { t } = useTranslation()
   const { onOpenFile, onOpenUrl } = usePlatform()
   const workspace = useActiveWorkspace()
+
+  const resolveContext = useCallback(async (): Promise<EditContext> => {
+    if (!directorySetting || !workspace?.id) return context
+    try {
+      const settings = await window.electronAPI.getWorkspaceSettings(workspace.id)
+      const directory = settings?.[directorySetting]
+      return directory ? { ...context, filePath: directory } : context
+    } catch (error) {
+      // Still send the request: the system prompt names the configured folder too
+      console.warn(`Failed to resolve ${directorySetting}:`, error)
+      return context
+    }
+  }, [context, directorySetting, workspace?.id])
 
   // Build placeholder: for inline execution use rotating array, otherwise build descriptive string
   // overridePlaceholder allows contexts like add-source/add-skill to say "add" instead of "change"
@@ -961,7 +983,7 @@ export function EditPopover({
   // Handle sending message from ChatDisplay (inline mode)
   // Creates hidden session on first message, then uses App context for sending
   const handleInlineSendMessage = useCallback(async (message: string) => {
-    const { prompt, badges } = buildEditPrompt(context, message, displayLabel)
+    const { prompt, badges } = buildEditPrompt(await resolveContext(), message, displayLabel)
 
     // Create session on first message
     let sessionId = inlineSessionId
@@ -983,11 +1005,11 @@ export function EditPopover({
     if (sessionId) {
       onSendMessage(sessionId, prompt, undefined, undefined, badges)
     }
-  }, [context, displayLabel, inlineSessionId, workspace?.id, model, systemPromptPreset, permissionMode, workingDirectory, onCreateSession, onSendMessage])
+  }, [resolveContext, displayLabel, inlineSessionId, workspace?.id, model, systemPromptPreset, permissionMode, workingDirectory, onCreateSession, onSendMessage])
 
   // Legacy mode: navigates to chat in the same window
-  const handleLegacySendMessage = useCallback((message: string) => {
-    const { prompt, badges } = buildEditPrompt(context, message, displayLabel)
+  const handleLegacySendMessage = useCallback(async (message: string) => {
+    const { prompt, badges } = buildEditPrompt(await resolveContext(), message, displayLabel)
     const encodedInput = encodeURIComponent(prompt)
     const encodedBadges = encodeURIComponent(JSON.stringify(badges))
 
@@ -999,7 +1021,7 @@ export function EditPopover({
 
     window.electronAPI.openUrl(url)
     setOpen(false)
-  }, [context, displayLabel, workingDirectory, model, systemPromptPreset, permissionMode, setOpen])
+  }, [resolveContext, displayLabel, workingDirectory, model, systemPromptPreset, permissionMode, setOpen])
 
   return (
     <>
