@@ -96,6 +96,10 @@ const PREFERENCES_FILE = join(CONFIG_DIR, 'preferences.json');
 // Debounce delay in milliseconds
 const DEBOUNCE_MS = 100;
 
+// Prefix of the extra skill folders' watchers (`extra-skills:0` for the first folder). It names
+// no workspace folder, so handleWorkspaceFileChange ignores their events.
+const EXTRA_SKILLS_PREFIX = 'extra-skills:';
+
 // Longer debounce for session metadata on Windows where fs.watch() fires
 // aggressively for atomic writes (unlink + rename = 2+ events)
 const SESSION_META_DEBOUNCE_MS = platform() === 'win32' ? 300 : DEBOUNCE_MS;
@@ -255,8 +259,11 @@ export class ConfigWatcher {
   private workspaceDir: string;
   private sourcesDir: string;
   private skillsDir: string;
-  // Existing folders listed in extraSkillDirs, one per line; not watched, only compared on refresh
-  private extraSkillsDirs: string;
+  // Existing folders listed in extraSkillDirs, in order; read again on refresh
+  private extraSkillsDirs: string[];
+  // Those folders with symlinks resolved, but not one that contains the workspace: a change in
+  // any of them reloads the skills list
+  private realExtraSkillsDirs: string[] = [];
 
   constructor(workspaceIdOrPath: string, callbacks: ConfigWatcherCallbacks) {
     this.callbacks = callbacks;
@@ -274,7 +281,7 @@ export class ConfigWatcher {
     this.sourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
     this.skillsDir = getWorkspaceSkillsPath(this.workspaceDir);
     this.realWorkspaceDir = this.workspaceDir;
-    this.extraSkillsDirs = getWorkspaceExtraSkillsPaths(this.workspaceDir).join('\n');
+    this.extraSkillsDirs = getWorkspaceExtraSkillsPaths(this.workspaceDir);
   }
 
   /**
@@ -402,6 +409,7 @@ export class ConfigWatcher {
     this.extraWatchers.clear();
     this.aliases = [];
     this.movedDefaults.clear();
+    this.realExtraSkillsDirs = [];
 
     this.knownSources.clear();
     this.knownSkills.clear();
@@ -521,6 +529,10 @@ export class ConfigWatcher {
   private handleChangeEverywhere(path: string | null, realPath: string, eventType: string): void {
     if (path) this.handleWorkspaceFileChange(path, eventType);
 
+    if (this.realExtraSkillsDirs.some(dir => isWithin(realPath, dir))) {
+      this.debounce('extra-skills', () => this.reloadSkillsList());
+    }
+
     // '' = the workspace itself (an event under a link `skills/foo` → `skills/bar` also reloads `bar`)
     for (const { prefix, dir } of [{ prefix: '', dir: this.realWorkspaceDir }, ...this.aliases]) {
       if (!isWithin(realPath, dir)) continue;
@@ -534,10 +546,10 @@ export class ConfigWatcher {
 
   /**
    * Bring the extra watchers and aliases in line with the folders on disk: the sources and
-   * skills folders unless they are the defaults in the workspace, plus every symlinked
+   * skills folders unless they are the defaults in the workspace, every symlinked
    * source/skill folder, whose contents fs.watch on macOS and Windows does not report
-   * through the link. Both kinds are placed together because one can sit inside a tree the
-   * other watches.
+   * through the link, and the extra skill folders. All are placed together because one can
+   * sit inside a tree another watches.
    */
   private syncExtraWatchers(): void {
     const workspace = realpathOrSelf(this.workspaceDir);
@@ -566,6 +578,10 @@ export class ConfigWatcher {
       }
     }
 
+    this.extraSkillsDirs.forEach((dir, i) => {
+      candidates.push({ prefix: `${EXTRA_SKILLS_PREFIX}${i}`, target: realpathOrSelf(dir) });
+    });
+
     // Shortest first, so a folder containing another is watched and the inner one covered by it
     candidates.sort((a, b) => a.target.length - b.target.length);
 
@@ -583,6 +599,7 @@ export class ConfigWatcher {
     this.realWorkspaceDir = workspace;
     this.aliases = aliases;
     this.movedDefaults = movedDefaults;
+    this.realExtraSkillsDirs = aliases.filter(a => a.prefix.startsWith(EXTRA_SKILLS_PREFIX)).map(a => a.dir);
     for (const [prefix, { dir }] of Array.from(this.extraWatchers)) {
       if (watches.get(prefix) !== dir) this.unwatchExtraDir(prefix);
     }
@@ -599,14 +616,14 @@ export class ConfigWatcher {
   /**
    * Re-read the sources/skills folders from the workspace config and, for each one that
    * moved, rescan it, re-point its watchers and broadcast its new list; a change in the
-   * extra skill folders (extraSkillDirs) also broadcasts the skills list. Runs when the
-   * workspace config.json changes; SessionManager also calls it right after the setting
-   * is saved.
+   * extra skill folders (extraSkillDirs) also re-points their watchers and broadcasts the
+   * skills list. Runs when the workspace config.json changes; SessionManager also calls it
+   * right after the setting is saved.
    */
   refreshDirectoryPaths(): void {
     const newSourcesDir = getWorkspaceSourcesPath(this.workspaceDir);
     const newSkillsDir = getWorkspaceSkillsPath(this.workspaceDir);
-    const newExtraSkillsDirs = getWorkspaceExtraSkillsPaths(this.workspaceDir).join('\n');
+    const newExtraSkillsDirs = getWorkspaceExtraSkillsPaths(this.workspaceDir);
 
     if (newSourcesDir !== this.sourcesDir) {
       debug('[ConfigWatcher] Sources directory changed:', this.sourcesDir, '->', newSourcesDir);
@@ -626,16 +643,22 @@ export class ConfigWatcher {
       this.syncExtraWatchers();
     }
 
-    const extraSkillsDirsChanged = newExtraSkillsDirs !== this.extraSkillsDirs;
+    const extraSkillsDirsChanged = newExtraSkillsDirs.join('\n') !== this.extraSkillsDirs.join('\n');
     if (extraSkillsDirsChanged) {
-      debug('[ConfigWatcher] Extra skill folders changed:', newExtraSkillsDirs || '(none)');
+      debug('[ConfigWatcher] Extra skill folders changed:', newExtraSkillsDirs.join(', ') || '(none)');
       this.extraSkillsDirs = newExtraSkillsDirs;
+      this.syncExtraWatchers();
     }
 
     if (skillsDirChanged || extraSkillsDirsChanged) {
-      invalidateSkillsCache();
-      this.callbacks.onSkillsListChange?.(loadAllSkills(this.workspaceDir));
+      this.reloadSkillsList();
     }
+  }
+
+  /** Load the skills list again from every level and broadcast it */
+  private reloadSkillsList(): void {
+    invalidateSkillsCache();
+    this.callbacks.onSkillsListChange?.(loadAllSkills(this.workspaceDir));
   }
 
   /**
