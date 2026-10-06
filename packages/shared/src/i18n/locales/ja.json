@@ -1390,6 +1390,8 @@
   "settings.workspace.noWorkspaceSelected": "Workspaceが選択されていません",
   "settings.workspace.permissionsSection": "権限",
   "settings.workspace.renameWorkspace": "Workspaceの名前を変更",
+  "settings.workspace.skillsDirectory": "スキルディレクトリ",
+  "settings.workspace.sourcesDirectory": "ソースディレクトリ",
   "settings.workspace.title": "Workspace",
   "settings.workspace.untitled": "無題",
   "settings.workspace.workspaceInfo": "Workspace情報",

@@ -300,13 +300,9 @@ export default function WorkspaceSettingsPage() {
   const handleClearSkillsDirectory = useCallback(async () => {
     if (!window.electronAPI) return
 
-    try {
-      const saved = await updateWorkspaceSetting('skillsDirectory', undefined)
-      if (saved) {
-        setSkillsDirectory('')
-      }
-    } catch (error) {
-      console.error('Failed to clear skills directory:', error)
+    const saved = await updateWorkspaceSetting('skillsDirectory', undefined)
+    if (saved) {
+      setSkillsDirectory('')
     }
   }, [updateWorkspaceSetting])
 
@@ -328,13 +324,9 @@ export default function WorkspaceSettingsPage() {
   const handleClearSourcesDirectory = useCallback(async () => {
     if (!window.electronAPI) return
 
-    try {
-      const saved = await updateWorkspaceSetting('sourcesDirectory', undefined)
-      if (saved) {
-        setSourcesDirectory('')
-      }
-    } catch (error) {
-      console.error('Failed to clear sources directory:', error)
+    const saved = await updateWorkspaceSetting('sourcesDirectory', undefined)
+    if (saved) {
+      setSourcesDirectory('')
     }
   }, [updateWorkspaceSetting])
 
@@ -608,8 +600,8 @@ export default function WorkspaceSettingsPage() {
                   }
                 />
                 <SettingsRow
-                  label="Skills Directory"
-                  description={skillsDirectory || 'Default (workspace/skills/)'}
+                  label={t('settings.workspace.skillsDirectory')}
+                  description={skillsDirectory || `${t('common.default')} (workspace/skills/)`}
                   action={
                     <div className="flex items-center gap-2">
                       {skillsDirectory && (
@@ -618,7 +610,7 @@ export default function WorkspaceSettingsPage() {
                           onClick={handleClearSkillsDirectory}
                           className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors text-foreground/60 hover:text-foreground"
                         >
-                          Clear
+                          {t('common.clear')}
                         </button>
                       )}
                       <button
@@ -626,14 +618,14 @@ export default function WorkspaceSettingsPage() {
                         onClick={handleChangeSkillsDirectory}
                         className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors"
                       >
-                        Change...
+                        {t('common.change')}
                       </button>
                     </div>
                   }
                 />
                 <SettingsRow
-                  label="Sources Directory"
-                  description={sourcesDirectory || 'Default (workspace/sources/)'}
+                  label={t('settings.workspace.sourcesDirectory')}
+                  description={sourcesDirectory || `${t('common.default')} (workspace/sources/)`}
                   action={
                     <div className="flex items-center gap-2">
                       {sourcesDirectory && (
@@ -642,7 +634,7 @@ export default function WorkspaceSettingsPage() {
                           onClick={handleClearSourcesDirectory}
                           className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors text-foreground/60 hover:text-foreground"
                         >
-                          Clear
+                          {t('common.clear')}
                         </button>
                       )}
                       <button
@@ -650,7 +642,7 @@ export default function WorkspaceSettingsPage() {
                         onClick={handleChangeSourcesDirectory}
                         className="inline-flex items-center h-8 px-3 text-sm rounded-lg bg-background shadow-minimal hover:bg-foreground/[0.02] transition-colors"
                       >
-                        Change...
+                        {t('common.change')}
                       </button>
                     </div>
                   }

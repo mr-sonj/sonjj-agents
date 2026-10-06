@@ -13,6 +13,36 @@ export const HANDLED_CHANNELS = [
   RPC_CHANNELS.skills.OPEN_FINDER,
 ] as const
 
+/** List a skill's files without following links inside it. */
+export function scanSkillDirectory(dirPath: string, onError?: (path: string, error: unknown) => void): SkillFile[] {
+  try {
+    const entries = readdirSync(dirPath, { withFileTypes: true })
+    return entries
+      .filter(entry => !entry.name.startsWith('.'))
+      .flatMap((entry): SkillFile[] => {
+        const fullPath = join(dirPath, entry.name)
+        try {
+          if (entry.isDirectory()) {
+            return [{ name: entry.name, type: 'directory', children: scanSkillDirectory(fullPath, onError) }]
+          }
+          // A link inside a skill can point back to an ancestor (or to several
+          // other links), so it is listed as a file and never followed. Its size
+          // is the target's; a broken link is skipped.
+          return [{ name: entry.name, type: 'file', size: statSync(fullPath).size }]
+        } catch {
+          return []
+        }
+      })
+      .sort((a, b) => {
+        if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
+        return a.name.localeCompare(b.name)
+      })
+  } catch (error) {
+    onError?.(dirPath, error)
+    return []
+  }
+}
+
 export function registerSkillsHandlers(server: RpcServer, deps: HandlerDeps): void {
   // Get all skills for a workspace (and optionally project-level skills from workingDirectory)
   server.handle(RPC_CHANNELS.skills.GET, async (_ctx, workspaceId: string, workingDirectory?: string) => {
@@ -46,43 +76,9 @@ export function registerSkillsHandlers(server: RpcServer, deps: HandlerDeps): vo
     const skillsDir = getWorkspaceSkillsPath(workspace.rootPath)
     const skillDir = join(skillsDir, skillSlug)
 
-    function scanDirectory(dirPath: string): SkillFile[] {
-      try {
-        const entries = readdirSync(dirPath, { withFileTypes: true })
-        return entries
-          .filter(entry => !entry.name.startsWith('.')) // Skip hidden files
-          .flatMap((entry): SkillFile[] => {
-            const fullPath = join(dirPath, entry.name)
-            try {
-              const stats = statSync(fullPath)
-              if (stats.isDirectory()) {
-                return [{
-                  name: entry.name,
-                  type: 'directory' as const,
-                  children: scanDirectory(fullPath),
-                }]
-              }
-              return [{
-                name: entry.name,
-                type: 'file' as const,
-                size: stats.size,
-              }]
-            } catch {
-              return []
-            }
-          })
-          .sort((a, b) => {
-            // Directories first, then files
-            if (a.type !== b.type) return a.type === 'directory' ? -1 : 1
-            return a.name.localeCompare(b.name)
-          })
-      } catch (err) {
-        deps.platform.logger?.error(`SKILLS_GET_FILES: Error scanning ${dirPath}:`, err)
-        return []
-      }
-    }
-
-    return scanDirectory(skillDir)
+    return scanSkillDirectory(skillDir, (path, error) => {
+      deps.platform.logger?.error(`SKILLS_GET_FILES: Error scanning ${path}:`, error)
+    })
   })
 
   // Delete a skill from a workspace

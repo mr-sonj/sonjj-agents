@@ -1390,6 +1390,8 @@
   "settings.workspace.noWorkspaceSelected": "未选择 Workspace",
   "settings.workspace.permissionsSection": "权限",
   "settings.workspace.renameWorkspace": "重命名 Workspace",
+  "settings.workspace.skillsDirectory": "技能目录",
+  "settings.workspace.sourcesDirectory": "来源目录",
   "settings.workspace.title": "Workspace",
   "settings.workspace.untitled": "无标题",
   "settings.workspace.workspaceInfo": "Workspace 信息",

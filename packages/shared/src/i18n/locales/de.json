@@ -1390,6 +1390,8 @@
   "settings.workspace.noWorkspaceSelected": "Kein Workspace ausgewählt",
   "settings.workspace.permissionsSection": "Berechtigungen",
   "settings.workspace.renameWorkspace": "Workspace umbenennen",
+  "settings.workspace.skillsDirectory": "Skill-Verzeichnis",
+  "settings.workspace.sourcesDirectory": "Quellenverzeichnis",
   "settings.workspace.title": "Workspace",
   "settings.workspace.untitled": "Unbenannt",
   "settings.workspace.workspaceInfo": "Workspace-Informationen",

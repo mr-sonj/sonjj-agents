@@ -1390,6 +1390,8 @@
   "settings.workspace.noWorkspaceSelected": "Nincs kiválasztott munkaterület",
   "settings.workspace.permissionsSection": "Engedélyek",
   "settings.workspace.renameWorkspace": "Munkaterület átnevezése",
+  "settings.workspace.skillsDirectory": "Készségek könyvtára",
+  "settings.workspace.sourcesDirectory": "Források könyvtára",
   "settings.workspace.title": "Munkaterület",
   "settings.workspace.untitled": "Névtelen",
   "settings.workspace.workspaceInfo": "Munkaterület adatai",

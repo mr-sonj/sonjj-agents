@@ -1390,6 +1390,8 @@
   "settings.workspace.noWorkspaceSelected": "Nie wybrano Workspace",
   "settings.workspace.permissionsSection": "Uprawnienia",
   "settings.workspace.renameWorkspace": "Zmień nazwę Workspace",
+  "settings.workspace.skillsDirectory": "Katalog umiejętności",
+  "settings.workspace.sourcesDirectory": "Katalog źródeł",
   "settings.workspace.title": "Workspace",
   "settings.workspace.untitled": "Bez nazwy",
   "settings.workspace.workspaceInfo": "Informacje o Workspace",

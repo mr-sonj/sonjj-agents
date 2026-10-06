@@ -204,8 +204,17 @@ describe('isValidCustomDirectory', () => {
     withDirs(({ workspace, outside }) => {
       expect(isValidCustomDirectory(outside, workspace, outside)).toEqual({
         valid: false,
-        reason: 'Skills and sources cannot use the same folder.',
+        reason: 'Skills and sources directories cannot overlap.',
       })
+    })
+  })
+
+  it('rejects nested skills and sources folders in either direction', () => {
+    withDirs(({ workspace, outside }) => {
+      const nested = join(outside, 'nested')
+      mkdirSync(nested)
+      expect(isValidCustomDirectory(nested, workspace, outside).valid).toBe(false)
+      expect(isValidCustomDirectory(outside, workspace, nested).valid).toBe(false)
     })
   })
 })
@@ -221,7 +230,7 @@ describe('isValidDirectorySetting', () => {
       // sourcesDirectory was set to {workspace}/skills while skills used a custom folder
       expect(isValidDirectorySetting(undefined, defaultSkills, workspace, defaultSkills)).toEqual({
         valid: false,
-        reason: 'Skills and sources cannot use the same folder.',
+        reason: 'Skills and sources directories cannot overlap.',
       })
       expect(isValidDirectorySetting(undefined, defaultSkills, workspace, join(workspace, 'sources'))).toEqual({ valid: true })
     } finally {
