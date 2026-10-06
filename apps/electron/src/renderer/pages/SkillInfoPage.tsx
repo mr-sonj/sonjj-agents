@@ -203,6 +203,7 @@ export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory
               <Info_Table.Row label={t('common.source')}>
                 {skill.source === 'project' ? t('skillInfo.sourceProject') :
                  skill.source === 'global' ? t('skillInfo.sourceGlobal') :
+                 skill.source === 'extra' ? t('skillInfo.sourceExtra') :
                  t('skillInfo.sourceWorkspace')}
               </Info_Table.Row>
               <Info_Table.Row label={t('common.location')}>
@@ -210,7 +211,8 @@ export default function SkillInfoPage({ skillSlug, workspaceId, workingDirectory
                   onClick={handleLocationClick}
                   className="-my-1 cursor-pointer rounded-xs py-1 text-left font-mono text-mono-ui [overflow-wrap:anywhere] hover:underline"
                 >
-                  {formatPath(skill.path)}
+                  {/* Extra folders can come from many projects, so show which one */}
+                  {skill.source === 'extra' ? skill.path : formatPath(skill.path)}
                 </button>
               </Info_Table.Row>
               {skill.metadata.requiredSources && skill.metadata.requiredSources.length > 0 && (

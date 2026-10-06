@@ -9,7 +9,7 @@ import { getWorkspaceOrThrow } from '@craft-agent/server-core/handlers'
 import type { RpcServer } from '@craft-agent/server-core/transport'
 import type { HandlerDeps } from '../handler-deps'
 import { requestClientOpenFileDialog } from '@craft-agent/server-core/transport'
-import { isValidWorkingDirectory, isValidDirectorySetting } from '../../utils/path-validation'
+import { isValidWorkingDirectory, isValidDirectorySetting, savedExtraSkillDirs, validateExtraSkillDirs } from '../../utils/path-validation'
 
 export const HANDLED_CHANNELS = [
   RPC_CHANNELS.workspace.SETTINGS_GET,
@@ -150,6 +150,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       workingDirectory: config?.defaults?.workingDirectory,
       skillsDirectory: config?.defaults?.skillsDirectory ? getWorkspaceSkillsPath(workspace.rootPath) : undefined,
       sourcesDirectory: config?.defaults?.sourcesDirectory ? getWorkspaceSourcesPath(workspace.rootPath) : undefined,
+      extraSkillDirs: savedExtraSkillDirs(config?.defaults?.extraSkillDirs),
       localMcpEnabled: config?.localMcpServers?.enabled ?? true,
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
@@ -168,7 +169,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const normalizedValue = isDirectoryKey && (trimmedValue === '' || trimmedValue === null) ? undefined : trimmedValue
 
     // Validate key is a known workspace setting
-    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'codingMode', 'workingDirectory', 'skillsDirectory', 'sourcesDirectory', 'localMcpEnabled', 'defaultLlmConnection', 'chatStarters']
+    const validKeys = ['name', 'model', 'enabledSourceSlugs', 'permissionMode', 'cyclablePermissionModes', 'thinkingLevel', 'codingMode', 'workingDirectory', 'skillsDirectory', 'sourcesDirectory', 'extraSkillDirs', 'localMcpEnabled', 'defaultLlmConnection', 'chatStarters']
     if (!validKeys.includes(key)) {
       throw new Error(`Invalid workspace setting key: ${key}. Valid keys: ${validKeys.join(', ')}`)
     }
@@ -221,6 +222,13 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     } else if (key === 'chatStarters') {
       // Top-level field, not in defaults
       config.chatStarters = (normalizedValue as Array<{ label: string; prompt: string }> | undefined) ?? []
+    } else if (key === 'extraSkillDirs') {
+      // Entries already saved are kept even if their folder is gone; new ones must match a folder
+      const validation = validateExtraSkillDirs(value, workspace.rootPath, savedExtraSkillDirs(config.defaults?.extraSkillDirs))
+      if (!validation.valid) {
+        throw new Error(validation.reason!)
+      }
+      config.defaults = { ...config.defaults, extraSkillDirs: validation.dirs }
     } else {
       // Update the setting in defaults
       config.defaults = config.defaults || {}
@@ -231,7 +239,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     saveWorkspaceConfig(workspace.rootPath, config)
 
     // Re-point the config watcher now so the skills/sources lists update right away
-    if (isDirectoryKey) {
+    if (isDirectoryKey || key === 'extraSkillDirs') {
       deps.sessionManager.refreshWorkspaceDirectoryPaths(workspace.rootPath)
     }
 

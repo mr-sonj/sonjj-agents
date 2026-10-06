@@ -28,8 +28,8 @@ export interface SkillMetadata {
   requiredSources?: string[];
 }
 
-/** Source of a loaded skill */
-export type SkillSource = 'global' | 'workspace' | 'project';
+/** Source of a loaded skill ('extra': a folder from the workspace's `extraSkillDirs`) */
+export type SkillSource = 'global' | 'extra' | 'workspace' | 'project';
 
 /**
  * Plugin name for project-level and global skills.
