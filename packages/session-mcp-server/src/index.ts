@@ -44,6 +44,8 @@ import {
   getToolDefsAsJsonSchema,
   // Helpers
   loadSourceConfig as loadSourceConfigFromHelpers,
+  resolveSourcesDir,
+  resolveSkillsDir,
   errorResponse,
 } from '@craft-agent/session-tools-core';
 
@@ -89,9 +91,11 @@ interface CredentialCacheEntry {
 /**
  * Get the path to a source's credential cache file.
  * The main process writes decrypted credentials to these files.
+ * Resolves custom sources directory from workspace config.
  */
 function getCredentialCachePath(workspaceRootPath: string, sourceSlug: string): string {
-  return join(workspaceRootPath, 'sources', sourceSlug, '.credential-cache.json');
+  const sourcesDir = resolveSourcesDir(workspaceRootPath);
+  return join(sourcesDir, sourceSlug, '.credential-cache.json');
 }
 
 /**
@@ -198,8 +202,8 @@ function createCodexContext(config: SessionConfig): SessionToolContext {
   return {
     sessionId,
     workspacePath: workspaceRootPath,
-    get sourcesPath() { return join(workspaceRootPath, 'sources'); },
-    get skillsPath() { return join(workspaceRootPath, 'skills'); },
+    get sourcesPath() { return resolveSourcesDir(workspaceRootPath); },
+    get skillsPath() { return resolveSkillsDir(workspaceRootPath); },
     plansFolderPath,
     sessionPath: sessionsDir,
     dataPath: sessionDataDir,

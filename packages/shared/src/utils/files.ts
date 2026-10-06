@@ -1,4 +1,4 @@
-import { existsSync, readFileSync, statSync, writeFileSync, unlinkSync, mkdtempSync, renameSync } from 'fs';
+import { existsSync, readFileSync, statSync, writeFileSync, unlinkSync, mkdtempSync, renameSync, type Dirent } from 'fs';
 import { extname, basename, resolve, join, relative, sep } from 'path';
 import { execSync } from 'child_process';
 import { tmpdir } from 'os';
@@ -48,6 +48,24 @@ export function atomicWriteFileSync(filePath: string, data: string): void {
     try { unlinkSync(tmpPath); } catch {}
     throw error;
   }
+}
+
+/**
+ * Safely check if a path is a directory (follows symlinks, returns false on errors/broken symlinks).
+ */
+export function isDirectorySafe(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if a readdir Dirent is a directory, following a symlink to one.
+ */
+export function isDirectoryEntry(parentDir: string, entry: Dirent): boolean {
+  return entry.isDirectory() || (entry.isSymbolicLink() && isDirectorySafe(join(parentDir, entry.name)));
 }
 
 export interface FileAttachment {
