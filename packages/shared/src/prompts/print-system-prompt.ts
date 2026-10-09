@@ -151,7 +151,7 @@ printSection(
   colors.magenta
 );
 printAnnotation('Contains: working_directory path and explanation. Context-file manifests are');
-printAnnotation('listed separately in <project_context_files> (every folder from root to working directory; CLAUDE.md the engine loads is left out).');
+printAnnotation('listed separately in <project_context_files> (3 levels: root, parent of working directory, working directory; CLAUDE.md the engine loads is left out).');
 
 // 6. Recovery Context (example)
 const exampleRecoveryContext = `<recovery_context>
