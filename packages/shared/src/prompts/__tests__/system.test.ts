@@ -353,7 +353,7 @@ describe('workspace skills/sources folders', () => {
       expect(second).toBeGreaterThan(first)
       expect(global).toBeGreaterThan(second)
       expect(prompt).not.toContain(join(base, 'missing'))
-      expect(prompt).not.toContain('three levels')
+      expect(prompt).not.toContain('Skills are stored at three levels')
     } finally {
       rmSync(base, { recursive: true, force: true })
     }
