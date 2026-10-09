@@ -104,7 +104,7 @@ describe('system prompt guidance', () => {
   it('explains which context files are listed and to read them again once they leave the context', () => {
     const prompt = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace')
 
-    expect(prompt).toContain('down through every folder to the working directory')
+    expect(prompt).toContain('three levels: the root, the parent folder of the working directory, and the working directory')
     expect(prompt).toContain('CLAUDE.md files already loaded into your context are not listed')
     expect(prompt).toContain('read a file again when its contents are no longer in your context')
     expect(prompt).toContain('skip one whose contents already appear in your context')
@@ -162,7 +162,7 @@ describe('getProjectContextFilesPrompt', () => {
     expect(prompt).not.toContain(join(selected, 'nested', 'AGENTS.md'))
   })
 
-  it('lists every level between the context root and a deeply nested working directory', () => {
+  it('limits context files search to max 3 levels (root, parent, selected) for deeply nested directories', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'project-context-deep-'))
     const root = join(tempDir, 'Root')
     const level1 = join(root, 'level1')
@@ -179,11 +179,29 @@ describe('getProjectContextFilesPrompt', () => {
 
     expect(listedContextFiles(getProjectContextFilesPrompt(selected, root))).toEqual([
       `- ${join(root, 'AGENTS.md')} (context root)`,
-      `- ${join(level1, 'AGENTS.md')} (parent context)`,
-      `- ${join(level2, 'AGENTS.md')} (parent context)`,
       `- ${join(level3, 'AGENTS.md')} (parent context)`,
       `- ${join(selected, 'AGENTS.md')} (working directory)`,
     ])
+  })
+
+  // MyMind/03-Workspace/content/<task>, MyMind being both the context root and the git root.
+  it('lists root, project and task, not the folder between them, for a task folder of a project', () => {
+    tempDir = mkdtempSync(join(tmpdir(), 'project-context-task-'))
+    const root = join(tempDir, 'MyMind')
+    const workspace = join(root, '03-Workspace')
+    const project = join(workspace, 'content')
+    const task = join(project, '261009-task')
+    mkdirSync(join(root, '.git'), { recursive: true })
+    mkdirSync(task, { recursive: true })
+    for (const dir of [root, workspace, project, task]) writeFileSync(join(dir, 'AGENTS.md'), '# rules')
+
+    const expected = [
+      `- ${join(root, 'AGENTS.md')} (context root)`,
+      `- ${join(project, 'AGENTS.md')} (parent context)`,
+      `- ${join(task, 'AGENTS.md')} (working directory)`,
+    ]
+    expect(listedContextFiles(getProjectContextFilesPrompt(task, root, task))).toEqual(expected)
+    expect(listedContextFiles(getProjectContextFilesPrompt(task, root))).toEqual(expected)
   })
 
   it('skips missing context files without requiring every directory to have one', () => {
@@ -201,19 +219,23 @@ describe('getProjectContextFilesPrompt', () => {
     expect(prompt).not.toContain(join(selected, 'AGENTS.md'))
   })
 
-  it('lists both workspace root and selected folder context when working directory is outside workspace root', () => {
+  it('lists the workspace root, then the parent and the selected folder, when working directory is outside workspace root', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'project-context-outside-'))
     const root = join(tempDir, 'MyMind')
-    const selected = join(tempDir, 'OtherProject')
+    const projects = join(tempDir, 'Projects')
+    const selected = join(projects, 'OtherProject')
     mkdirSync(root, { recursive: true })
     mkdirSync(selected, { recursive: true })
+    writeFileSync(join(tempDir, 'AGENTS.md'), '# above both')
     writeFileSync(join(root, 'AGENTS.md'), '# root')
+    writeFileSync(join(projects, 'AGENTS.md'), '# parent')
     writeFileSync(join(selected, 'AGENTS.md'), '# selected')
 
-    const prompt = getProjectContextFilesPrompt(selected, root)
-
-    expect(prompt).toContain(`- ${join(root, 'AGENTS.md')} (context root)`)
-    expect(prompt).toContain(`- ${join(selected, 'AGENTS.md')} (working directory)`)
+    expect(listedContextFiles(getProjectContextFilesPrompt(selected, root))).toEqual([
+      `- ${join(root, 'AGENTS.md')} (context root)`,
+      `- ${join(projects, 'AGENTS.md')} (parent context)`,
+      `- ${join(selected, 'AGENTS.md')} (working directory)`,
+    ])
   })
 
   it('does not treat a path with the same prefix as inside the workspace root', () => {
@@ -319,42 +341,37 @@ describe('getProjectContextFilesPrompt', () => {
     expect(prompt).not.toContain(join(repo, 'apps', 'web', 'AGENTS.md'))
   })
 
-  it('follows the selected folder chain after the context root when the working directory is in a repository outside it', () => {
+  it('lists the context root, the parent and the working directory, not the repository root, for a repository outside the context root', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'project-context-outside-git-'))
     const root = join(tempDir, 'MyMind')
     mkdirSync(root, { recursive: true })
     writeFileSync(join(root, 'AGENTS.md'), '# root')
-    const { repo, packages, app } = createRepository(tempDir)
+    const { packages, app } = createRepository(tempDir)
 
-    const lines = getProjectContextFilesPrompt(app, root).split('\n').filter((line) => line.startsWith('- '))
-
-    expect(lines).toEqual([
+    expect(listedContextFiles(getProjectContextFilesPrompt(app, root))).toEqual([
       `- ${join(root, 'AGENTS.md')} (context root)`,
-      `- ${join(repo, 'AGENTS.md')} (repository root)`,
       `- ${join(packages, 'AGENTS.md')} (parent context)`,
       `- ${join(app, 'AGENTS.md')} (working directory)`,
     ])
   })
 
-  it('lists the repository root when the repository sits inside the context root', () => {
+  it('limits the chain from the context root to 3 levels when a repository sits inside it', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'project-context-repo-inside-root-'))
     writeFileSync(join(tempDir, 'AGENTS.md'), '# root')
-    const { repo, packages, app } = createRepository(tempDir)
+    const { packages, app } = createRepository(tempDir)
 
     expect(listedContextFiles(getProjectContextFilesPrompt(app, tempDir))).toEqual([
       `- ${join(tempDir, 'AGENTS.md')} (context root)`,
-      `- ${join(repo, 'AGENTS.md')} (repository root)`,
       `- ${join(packages, 'AGENTS.md')} (parent context)`,
       `- ${join(app, 'AGENTS.md')} (working directory)`,
     ])
   })
 
-  it('starts at the repository root when the context root lies inside the repository', () => {
+  it('starts at the context root even when it lies inside a repository', () => {
     tempDir = mkdtempSync(join(tmpdir(), 'project-context-root-inside-repo-'))
-    const { repo, packages, app } = createRepository(tempDir)
+    const { packages, app } = createRepository(tempDir)
 
     expect(listedContextFiles(getProjectContextFilesPrompt(app, packages))).toEqual([
-      `- ${join(repo, 'AGENTS.md')} (repository root)`,
       `- ${join(packages, 'AGENTS.md')} (context root)`,
       `- ${join(app, 'AGENTS.md')} (working directory)`,
     ])
@@ -383,14 +400,14 @@ describe('getProjectContextFilesPrompt', () => {
       mkdirSync(root, { recursive: true })
       mkdirSync(sessionFolder, { recursive: true })
       writeFileSync(join(root, 'CLAUDE.md'), '# root claude')
-      const { repo, app } = createRepository(tempDir)
+      const { packages, app } = createRepository(tempDir)
       writeFileSync(join(app, 'CLAUDE.md'), '# app claude')
 
       const lines = listedContextFiles(getProjectContextFilesPrompt(app, root, sessionFolder))
 
       expect(lines).toContain(`- ${join(root, 'CLAUDE.md')} (context root)`)
       expect(lines).toContain(`- ${join(app, 'CLAUDE.md')} (working directory)`)
-      expect(lines).toContain(`- ${join(repo, 'AGENTS.md')} (repository root)`)
+      expect(lines).toContain(`- ${join(packages, 'AGENTS.md')} (parent context)`)
     })
 
     it('leaves out an AGENTS.md the engine already loads through a CLAUDE.md link', () => {

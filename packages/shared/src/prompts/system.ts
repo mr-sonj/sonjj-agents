@@ -87,10 +87,10 @@ type ProjectContextDirectoryLabel = 'context root' | 'repository root' | 'parent
 
 /**
  * Directories whose context files apply to the selected working directory, root first:
- * every folder from the base down to the selection. The base is whichever of the context
- * root (when the selection is inside it) and the selection's git repository root encloses
- * the other, else the selection itself; a context root the selection lies outside of is
- * still listed in front.
+ * at most 3 levels, the root, the selection's parent and the selection; folders between
+ * the root and the parent are skipped so deep trees stay short. The root is the context
+ * root, also when the selection lies outside it; without one it is the selection's git
+ * repository root, else the selection itself.
  */
 function getProjectContextSearchDirectories(
   workingDirectory: string,
@@ -99,35 +99,25 @@ function getProjectContextSearchDirectories(
   const selectedDir = resolve(workingDirectory);
   const rootDir = contextRootPath ? resolve(contextRootPath) : undefined;
   const gitRoot = findGitRepositoryRoot(selectedDir) ?? undefined;
-  const rootEnclosesSelection = rootDir !== undefined && isSameOrChildPath(rootDir, selectedDir);
-  const directories: Array<{ directory: string; label: ProjectContextDirectoryLabel }> = [];
+  const baseDir = rootDir ?? gitRoot ?? selectedDir;
 
-  if (rootDir && !rootEnclosesSelection) {
-    directories.push({ directory: rootDir, label: 'context root' });
+  const chain = [baseDir];
+  if (selectedDir !== baseDir) {
+    const parentDir = dirname(selectedDir);
+    if (parentDir !== baseDir && parentDir !== selectedDir) chain.push(parentDir);
+    chain.push(selectedDir);
   }
 
-  let baseDir = selectedDir;
-  for (const boundary of [rootEnclosesSelection ? rootDir : undefined, gitRoot]) {
-    if (boundary && isSameOrChildPath(boundary, baseDir)) baseDir = boundary;
-  }
-
-  const chain: string[] = [];
-  for (let dir = selectedDir; ; dir = dirname(dir)) {
-    chain.unshift(dir);
-    if (dir === baseDir || dirname(dir) === dir) break;
-  }
-
-  for (const directory of chain) {
-    const label: ProjectContextDirectoryLabel = directory === selectedDir
+  return chain.map((directory) => ({
+    directory,
+    label: directory === selectedDir
       ? 'working directory'
       : directory === rootDir
         ? 'context root'
         : directory === gitRoot
           ? 'repository root'
-          : 'parent context';
-    directories.push({ directory, label });
-  }
-  return directories;
+          : 'parent context',
+  }));
 }
 
 /**
@@ -660,7 +650,7 @@ Skills are stored at three levels (checked in order):
 
 ## Project Context
 
-When \`<project_context_files>\` appears in the system prompt, it lists the context files (AGENTS.md, CLAUDE.md) that apply to the working directory, root first: from the context root (the workspace default working directory) or the git repository root, whichever encloses the other, down through every folder to the working directory. If the working directory is outside the context root, the context root's files are listed first. CLAUDE.md files already loaded into your context are not listed.
+When \`<project_context_files>\` appears in the system prompt, it lists the context files (AGENTS.md, CLAUDE.md) that apply to the working directory, root first, in three levels: the root, the parent folder of the working directory, and the working directory. The root is the context root (the workspace default working directory), also when the working directory is outside it; without a context root it is the git repository root. Folders between the root and the parent are not listed. CLAUDE.md files already loaded into your context are not listed.
 
 **CRITICAL INSTRUCTION**: Listed files are NOT loaded into your context automatically. You MUST read ALL of them using the Read tool, from root to working directory, before acting (skip one whose contents already appear in your context, e.g. through a CLAUDE.md \`@AGENTS.md\` import), and read a file again when its contents are no longer in your context (e.g. after compaction).
 **Subfolders**: When the task moves into a subfolder of the working directory that has its own AGENTS.md (or CLAUDE.md), read that file before working there.
