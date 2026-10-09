@@ -54,6 +54,15 @@ describe('session tool filtering helpers', () => {
     expect(names.includes('send_developer_feedback')).toBe(false);
   });
 
+  it('converts every session tool to an object-root JSON schema', () => {
+    const defs = getToolDefsAsJsonSchema({ includeDeveloperFeedback: true });
+
+    for (const def of defs) {
+      expect(def.inputSchema.type, def.name).toBe('object');
+      expect(def.inputSchema.properties, def.name).toBeTypeOf('object');
+    }
+  });
+
   it('all canonical session tools declare safeMode metadata', () => {
     for (const def of SESSION_TOOL_DEFS) {
       expect(def.safeMode === 'allow' || def.safeMode === 'block').toBe(true);
