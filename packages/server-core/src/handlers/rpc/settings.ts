@@ -191,6 +191,12 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       // Update the setting in defaults
       config.defaults = config.defaults || {}
       ;(config.defaults as Record<string, unknown>)[key] = normalizedValue
+      // Pointing the workspace at a different project folder retires the folder remembered
+      // from earlier sessions — otherwise new sessions would keep opening the old one and
+      // changing the setting would look like it did nothing.
+      if (key === 'workingDirectory') {
+        delete config.defaults.lastSessionWorkingDirectory
+      }
     }
 
     // Save the config
