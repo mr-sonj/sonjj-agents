@@ -58,6 +58,8 @@ Environment variables (from .env or environment):
   APPLE_TEAM_ID             - Apple Team ID
   APPLE_APP_SPECIFIC_PASSWORD - App-specific password
   S3_VERSIONS_BUCKET_*      - S3 credentials (for --upload)
+  CRAFT_DMG_STAGING=1       - Package from a staging copy outside the workspace
+                              (avoids electron-builder running out of memory)
 EOF
     exit 0
 }
@@ -87,6 +89,8 @@ fi
 
 # 1. Clean previous build artifacts
 echo "Cleaning previous builds..."
+# Files copied from the bun cache are read-only; make them writable so rm can delete them.
+chmod -R u+w "$ELECTRON_DIR/vendor" "$ELECTRON_DIR/node_modules/@anthropic-ai" "$ELECTRON_DIR/packages" "$ELECTRON_DIR/release" 2>/dev/null || true
 rm -rf "$ELECTRON_DIR/vendor"
 rm -rf "$ELECTRON_DIR/node_modules/@anthropic-ai"
 rm -rf "$ELECTRON_DIR/packages"
@@ -208,17 +212,44 @@ done
 # 6. Build Electron app
 echo "Building Electron app..."
 cd "$ROOT_DIR"
-bun run electron:build
+# CRAFT_BUILD_ARCH picks the koffi native binary bundled with pi-agent-server
+CRAFT_BUILD_ARCH="$ARCH" bun run electron:build
 
 # 7. Package with electron-builder
+# CRAFT_DMG_STAGING=1: electron-builder walks up from the project dir to the
+# workspace root and scans the whole workspace node_modules before applying
+# excludes, which can run out of memory on a local machine. Package from a
+# staging copy outside the repo instead. The copy keeps the apps/electron layout
+# so relative paths in electron-builder.yml (../../packages/...) still resolve;
+# every extraResources entry in electron-builder.yml must be copied in here.
+BUILDER_DIR="$ELECTRON_DIR"
+if [ "${CRAFT_DMG_STAGING:-}" = "1" ]; then
+    STAGING_ROOT="$TEMP_DIR/eb-staging"
+    BUILDER_DIR="$STAGING_ROOT/apps/electron"
+    echo "Staging app for electron-builder in $BUILDER_DIR..."
+    mkdir -p "$BUILDER_DIR/node_modules"
+    rsync -a --exclude='/node_modules' --exclude='/release' --exclude='*.map' \
+        "$ELECTRON_DIR/" "$BUILDER_DIR/"
+    # extraResources: the SDK, its native binary alias and ripgrep staged above
+    cp -R "$ELECTRON_DIR/node_modules/@anthropic-ai" "$ELECTRON_DIR/node_modules/@vscode" \
+        "$BUILDER_DIR/node_modules/"
+    WA_WORKER="packages/messaging-whatsapp-worker/dist/worker.cjs"
+    require_path "$ROOT_DIR/$WA_WORKER" "WhatsApp worker bundle" "Run 'bun run electron:build' first."
+    mkdir -p "$STAGING_ROOT/$(dirname "$WA_WORKER")"
+    cp "$ROOT_DIR/$WA_WORKER" "$STAGING_ROOT/$WA_WORKER"
+fi
+
 echo "Packaging app with electron-builder..."
-cd "$ELECTRON_DIR"
+cd "$BUILDER_DIR"
 
 # Set up environment for electron-builder
 export CSC_IDENTITY_AUTO_DISCOVERY=true
 
 # Build electron-builder arguments
-BUILDER_ARGS="--mac --${ARCH}"
+# Name the targets: electron-builder ignores --${ARCH} for targets that list their
+# own arch in electron-builder.yml, and would also package the other arch with this
+# arch's bun/claude/koffi binaries (an app that cannot run).
+BUILDER_ARGS="--mac dmg zip --${ARCH}"
 
 # Add code signing if identity is available
 if [ -n "$APPLE_SIGNING_IDENTITY" ]; then
@@ -241,8 +272,13 @@ if [ -n "$APPLE_ID" ] && [ -n "$APPLE_TEAM_ID" ] && [ -n "$APPLE_APP_SPECIFIC_PA
     export NOTARIZE=true
 fi
 
-# Run electron-builder
-npx electron-builder $BUILDER_ARGS
+# Run electron-builder by absolute path (npx from a staging dir would not find it)
+"$ROOT_DIR/node_modules/.bin/electron-builder" $BUILDER_ARGS
+
+if [ "$BUILDER_DIR" != "$ELECTRON_DIR" ]; then
+    mkdir -p "$ELECTRON_DIR/release"
+    cp -R "$BUILDER_DIR/release/." "$ELECTRON_DIR/release/"
+fi
 
 # 8. Verify the DMG was built
 # electron-builder.yml uses artifactName to output: Craft-Agents-${arch}.dmg
