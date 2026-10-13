@@ -18,10 +18,10 @@ index 478c2c387b3a9c781c04a2268677c62a26093d42..e8b58f592b09b0b85d25b31fe74a9d56
      }
      return result;
 diff --git a/dist/api/google-vertex.js b/dist/api/google-vertex.js
-index 85ca3a5d0bd811ae36242381428bf48765271076..7cdc0dce4c0b10aa7791a6d1257c09cea722b5ba 100644
+index b51f64e88b2d7b5eb7a921f2fa6da246b6f3a084..bb8a89ed33bfa4c05859f172bfd06ce51eb1c167 100644
 --- a/dist/api/google-vertex.js
 +++ b/dist/api/google-vertex.js
-@@ -371,7 +371,9 @@ function buildParams(model, context, options = {}) {
+@@ -372,7 +372,9 @@ function buildParams(model, context, options = {}) {
          ...(Object.keys(generationConfig).length > 0 && generationConfig),
          ...(systemInstruction && { systemInstruction: sanitizeSurrogates(systemInstruction) }),
          ...(currentTools.length > 0 && {
