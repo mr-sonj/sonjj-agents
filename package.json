@@ -217,6 +217,6 @@
     "@img/sharp-libvips-linux-x64": "1.2.4"
   },
   "patchedDependencies": {
-    "@earendil-works/pi-ai@0.87.1": "patches/@earendil-works%2Fpi-ai@0.87.1.patch"
+    "@earendil-works/pi-ai@1.1.0": "patches/@earendil-works%2Fpi-ai@1.1.0.patch"
   }
 }
