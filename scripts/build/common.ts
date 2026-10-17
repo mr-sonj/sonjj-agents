@@ -509,6 +509,8 @@ export function copyPiAgentServer(config: BuildConfig): void {
   }
 
   console.log('Copying Pi Agent Server...');
+  // Start clean: files left by an earlier build (old bundle layouts) would be packaged too
+  rmSync(piDestDir, { recursive: true, force: true });
   mkdirSync(piDestDir, { recursive: true });
 
   // 1. Copy index.js

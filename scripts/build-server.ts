@@ -55,6 +55,7 @@ import {
   downloadBun,
   downloadUv,
   buildSubprocessServers,
+  copyPiAgentServer,
   getPlatformKey,
 } from './build/common';
 
@@ -118,7 +119,7 @@ function assembleResources(config: ServerBuildConfig): void {
   const destResources = join(outputDir, 'resources');
 
   console.log('  Copying docs, themes, permissions, tool-icons...');
-  for (const dir of ['docs', 'themes', 'permissions', 'tool-icons']) {
+  for (const dir of ['docs', 'themes', 'permissions', 'tool-icons', 'pi-agent-server']) {
     const src = join(srcResources, dir);
     if (existsSync(src)) {
       cpSync(src, join(destResources, dir), { recursive: true });
@@ -837,6 +838,10 @@ async function main(): Promise<void> {
     electronDir,
   };
   buildSubprocessServers(buildConfig);
+  // Stage it in apps/electron/resources (with koffi for the target platform);
+  // assembleResources copies it to resources/pi-agent-server, where the
+  // runtime resolver looks in packaged builds.
+  copyPiAgentServer(buildConfig);
 
   // Build the WhatsApp worker bundle. Must happen before copyWorkspacePackages
   // so dist/worker.cjs exists when we copy the messaging-whatsapp-worker package.
