@@ -1623,7 +1623,7 @@ export function FreeFormInput({
           filter={inlineMention.filter}
           position={inlineMention.position}
           workspaceId={workspaceId}
-          maxWidth={280}
+          maxWidth={360}
           isSearching={inlineMention.isSearching}
         />
 
