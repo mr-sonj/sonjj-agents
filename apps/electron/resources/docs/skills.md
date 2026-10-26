@@ -82,6 +82,11 @@ A workspace can load skills from more folders with `extraSkillDirs` in its `conf
   skill added, edited or removed there shows in the skills list and reaches the agent within about
   a second. A folder that contains the workspace is not watched. A listed folder that does not
   exist yet is picked up the next time the setting changes or the app (or server) restarts.
+- The `@` menu in the chat input shows each skill's folder at the end of its row: the folder the skill
+  sits in, or the one above it when that is a `skills` or `.agents/skills` folder (`my-app` and
+  `team-skills` for the folders above, `~/.agents` for global skills). Skills of the session's working
+  directory come first. Typing the start of a folder name and `/` (`@my-app/`, `@team/review`) lists
+  only that folder's skills.
 
 ## SKILL.md Format
 
