@@ -26,6 +26,8 @@ export interface MentionItem {
   type: MentionItemType
   label: string
   description?: string
+  /** Skills only: the folder the skill was loaded from (getSkillFolderLabel), shown and matched by `@folder/` */
+  folder?: string
   // Type-specific data
   skill?: LoadedSkill
   source?: LoadedSource
@@ -119,6 +121,64 @@ function filterCacheResults(cache: FileSearchResult[], query: string): MentionIt
 }
 
 // ============================================================================
+// Skill folders
+// ============================================================================
+
+/**
+ * Name of the folder a skill comes from: the folder it sits in, or the one above when that is a `skills`
+ * (or `.agents/skills`, `.claude/skills`) folder, e.g. ".../crm-app/.agents/skills/cron"
+ * → "crm-app", ".../team-skills/review" → "team-skills".
+ * Global skills (~/.agents/skills) are labeled "~/.agents".
+ */
+export function getSkillFolderLabel(skill: Pick<LoadedSkill, 'path' | 'source'>): string {
+  if (skill.source === 'global') return '~/.agents'
+  const parts = skill.path.split(/[\\/]/).filter(Boolean)
+  parts.pop()
+  if (parts[parts.length - 1] === 'skills') parts.pop()
+  if (parts[parts.length - 1] === '.agents' || parts[parts.length - 1] === '.claude') parts.pop()
+  return parts[parts.length - 1] ?? ''
+}
+
+/** Whether the item is a skill of the session's working directory (`{cwd}/.agents/skills`) */
+function isWorkingDirSkill(item: MentionItem): boolean {
+  return item.skill?.source === 'project'
+}
+
+/** Skill items for the @ menu: the working directory's skills first, the others in the order given */
+export function getSkillMentionItems(skills: LoadedSkill[]): MentionItem[] {
+  const items = skills.map(skill => ({
+    id: skill.slug,
+    type: 'skill' as const,
+    label: skill.metadata.name,
+    description: skill.metadata.description,
+    folder: getSkillFolderLabel(skill) || undefined,
+    skill,
+  }))
+  return items.sort((a, b) => Number(isWorkingDirSkill(b)) - Number(isWorkingDirSkill(a)))
+}
+
+/** Folder name as matched by `@folder/`: lowercase, without the leading "@", "~/." that can't be typed after @ */
+function folderMatchKey(folder: string): string {
+  return folder.toLowerCase().replace(/^[@~/.]+/, '')
+}
+
+/**
+ * Read `folder/rest` as a skill folder scope when the text before the first "/" starts the name of a skill
+ * folder. Returns null otherwise, so the filter is matched as before (e.g. a file path).
+ */
+function parseFolderScope(items: MentionItem[], lowerFilter: string): { folders: Set<string>; rest: string } | null {
+  const slash = lowerFilter.indexOf('/')
+  if (slash < 0) return null
+  const scope = folderMatchKey(lowerFilter.slice(0, slash))
+  if (!scope) return null
+  const folders = new Set<string>()
+  for (const item of items) {
+    if (item.folder && folderMatchKey(item.folder).startsWith(scope)) folders.add(item.folder)
+  }
+  return folders.size > 0 ? { folders, rest: lowerFilter.slice(slash + 1) } : null
+}
+
+// ============================================================================
 // Filter utilities
 // ============================================================================
 
@@ -142,32 +202,40 @@ function getMatchScore(text: string, filter: string): number {
   return 0
 }
 
-function filterSections(sections: MentionSection[], filter: string): MentionSection[] {
+export function filterSections(sections: MentionSection[], filter: string): MentionSection[] {
   if (!filter) return sections
   const lowerFilter = filter.trimEnd().toLowerCase()
   if (!lowerFilter) return sections
 
   // Collect all matching items across sections
   const allItems = sections.flatMap(section => section.items)
-  const matchingItems = allItems.filter(item =>
-    item.label?.toLowerCase().includes(lowerFilter) ||
-    item.id?.toLowerCase().includes(lowerFilter) ||
-    item.description?.toLowerCase().includes(lowerFilter)
-  )
+  // `@folder/rest`: skills only from that folder, matched by rest; other items match the whole filter as before
+  const folderScope = parseFolderScope(allItems, lowerFilter)
+  const isScoped = (item: MentionItem) => folderScope !== null && item.type === 'skill'
+  const queryFor = (item: MentionItem) => isScoped(item) ? folderScope!.rest : lowerFilter
+  const matchingItems = allItems.filter(item => {
+    if (isScoped(item) && !folderScope!.folders.has(item.folder ?? '')) return false
+    const query = queryFor(item)
+    return item.label?.toLowerCase().includes(query) ||
+      item.id?.toLowerCase().includes(query) ||
+      item.description?.toLowerCase().includes(query)
+  })
 
   // Sort by match priority: first word > later word > contains
   matchingItems.sort((a, b) => {
-    const aLabelScore = getMatchScore(a.label, lowerFilter)
-    const bLabelScore = getMatchScore(b.label, lowerFilter)
-    const aIdScore = getMatchScore(a.id, lowerFilter)
-    const bIdScore = getMatchScore(b.id, lowerFilter)
+    const aLabelScore = getMatchScore(a.label, queryFor(a))
+    const bLabelScore = getMatchScore(b.label, queryFor(b))
+    const aIdScore = getMatchScore(a.id, queryFor(a))
+    const bIdScore = getMatchScore(b.id, queryFor(b))
 
     // Compare by best score (label or id)
     const aScore = Math.max(aLabelScore, aIdScore)
     const bScore = Math.max(bLabelScore, bIdScore)
     if (aScore !== bScore) return bScore - aScore
 
-    // Same score tier: alphabetical by label
+    // Same score tier: the working directory's skills first, then alphabetical by label
+    const workingDirOrder = Number(isWorkingDirSkill(b)) - Number(isWorkingDirSkill(a))
+    if (workingDirOrder !== 0) return workingDirOrder
     return a.label.localeCompare(b.label)
   })
 
@@ -216,7 +284,7 @@ export function InlineMentionMenu({
   filter = '',
   position,
   workspaceId,
-  maxWidth = 280,
+  maxWidth = 360,
   className,
 }: InlineMentionMenuProps) {
   const { t } = useTranslation()
@@ -364,9 +432,15 @@ export function InlineMentionMenu({
                 </>
               ) : (
                 <>
-                  {/* Skill/source: label with type badge */}
-                  <div className="flex-1 min-w-0">
-                    <span className="truncate block">{item.label}</span>
+                  {/* Skill/source: label, skills' folder right-aligned before the type badge */}
+                  <div className="flex flex-1 min-w-0 items-center gap-2">
+                    {/* The name keeps its full width; the folder is cut to what is left */}
+                    <span className="shrink-0 max-w-full truncate">{item.label}</span>
+                    {item.folder && (
+                      <span className="ml-auto min-w-0 max-w-[7.5rem] truncate text-right text-label-sm text-tertiary">
+                        {item.folder}
+                      </span>
+                    )}
                   </div>
                   <span className={MENU_TYPE_BADGE}>
                     {item.type === 'skill' ? t('common.skill') : t('common.source')}
@@ -521,13 +595,7 @@ export function useInlineMention({
       result.push({
         id: 'skills',
         label: 'Skills',
-        items: skills.map(skill => ({
-          id: skill.slug,
-          type: 'skill' as const,
-          label: skill.metadata.name,
-          description: skill.metadata.description,
-          skill,
-        })),
+        items: getSkillMentionItems(skills),
       })
     }
 
