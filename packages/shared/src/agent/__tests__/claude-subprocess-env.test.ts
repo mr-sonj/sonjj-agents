@@ -1,11 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test';
-import { buildClaudeSubprocessEnv } from '../options.ts';
+import { buildClaudeSubprocessEnv, engineLoadsClaudeMd } from '../options.ts';
 
 const original = {
   CLAUDE_CODE_ENABLE_TODO_TOOLS: process.env.CLAUDE_CODE_ENABLE_TODO_TOOLS,
   ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
   ENABLE_TOOL_SEARCH: process.env.ENABLE_TOOL_SEARCH,
   CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: process.env.CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK,
+  CLAUDE_CODE_DISABLE_CLAUDE_MDS: process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS,
 };
 
 afterEach(() => {
@@ -59,5 +60,26 @@ describe('buildClaudeSubprocessEnv', () => {
     expect(buildClaudeSubprocessEnv({ ANTHROPIC_BASE_URL: 'https://api.anthropic.com' }).CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK).toBeUndefined();
     expect(buildClaudeSubprocessEnv({ ANTHROPIC_BASE_URL: 'https://openrouter.ai/api' }).CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK).toBe('1');
     expect(buildClaudeSubprocessEnv({ ANTHROPIC_BASE_URL: 'https://gateway.example.com', CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK: '0' }).CLAUDE_CODE_DISABLE_REFUSAL_FALLBACK).toBe('0');
+  });
+
+  // The system prompt leaves out the CLAUDE.md files the engine loads itself
+  // (prompts/system.ts), so the engine must keep loading them.
+  it('leaves the engine loading CLAUDE.md files', () => {
+    delete process.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS;
+    expect(buildClaudeSubprocessEnv().CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBeUndefined();
+  });
+});
+
+describe('engineLoadsClaudeMd', () => {
+  it('is true while CLAUDE_CODE_DISABLE_CLAUDE_MDS is unset or falsy', () => {
+    expect(engineLoadsClaudeMd({})).toBe(true);
+    expect(engineLoadsClaudeMd({ CLAUDE_CODE_DISABLE_CLAUDE_MDS: '0' })).toBe(true);
+    expect(engineLoadsClaudeMd({ CLAUDE_CODE_DISABLE_CLAUDE_MDS: 'false' })).toBe(true);
+  });
+
+  it('is false for every value the engine reads as true', () => {
+    for (const value of ['1', 'true', 'YES', ' on ']) {
+      expect(engineLoadsClaudeMd({ CLAUDE_CODE_DISABLE_CLAUDE_MDS: value })).toBe(false);
+    }
   });
 });
