@@ -77,6 +77,21 @@ describe('Craft metadata schema compatibility for Pi tools', () => {
     expect(widened.properties._intent).toBe(upstreamIntent);
   });
 
+  it('restores an explicit object root for serialized proxy schemas', () => {
+    const schema = {
+      properties: {
+        query: { type: 'string' },
+      },
+      required: ['query'],
+    };
+
+    const widened = allowCraftMetadataProperties(schema);
+
+    expect(widened.type).toBe('object');
+    expect(widened.required).toEqual(['query']);
+    expect(widened.properties.query).toBe(schema.properties.query);
+  });
+
   it('returns unknown schema shapes unchanged', () => {
     expect(allowCraftMetadataProperties(undefined)).toBeUndefined();
     expect(allowCraftMetadataProperties('schema')).toBe('schema');
