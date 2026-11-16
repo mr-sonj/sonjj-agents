@@ -24,6 +24,7 @@ FEATURES=(
     "fix/gemini-vertex-tool-schemas"
     "feature/custom-tweaks"
     "feature/agents-md-discovery"
+    "fix/custom-endpoint-web-search"
     "fork/meta"
 )
 
