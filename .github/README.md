@@ -15,6 +15,7 @@ Sonjj Agents is an independent project. It is not affiliated with or endorsed by
 - **`AGENTS.md` from external working directories** is read when a session works outside the
   workspace folder.
 - **Gemini and Vertex AI** accept the tool list.
+- **Web search on custom endpoints** no longer sends the endpoint's key to OpenAI.
 - **Self-hosted server on the LAN**: plain `ws://` connections, automatic reconnect after sleep,
   unlock or a network change.
 - **Its own name, icon and bundle id**, and no updates from Craft's servers.
