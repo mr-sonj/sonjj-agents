@@ -6,7 +6,10 @@
 # Dry run: start the workflow by hand on any branch. Everything is built and checked, and the
 # files are kept as workflow artifacts for a few days instead of being published.
 #
-# Builds are not signed. Branding (scripts/apply-branding.ts) is applied to the checkout before
+# The macOS build is signed with a Developer ID certificate and notarized when the repository has
+# the secrets CSC_LINK (the .p12 file, base64), CSC_KEY_PASSWORD, APPLE_ID,
+# APPLE_APP_SPECIFIC_PASSWORD and APPLE_TEAM_ID; without CSC_LINK it gets an ad-hoc signature.
+# Windows and Linux builds are not signed. Branding (scripts/apply-branding.ts) is applied to the checkout before
 # every build, as Craft's trademark policy asks of forks. Nothing is published unless the same
 # commit passes fork-validate.yml (typecheck, upstream's tests, the fork's tests).
 
@@ -66,6 +69,7 @@ jobs:
         if: github.ref_type == 'tag'
         env:
           VERSION: ${{ steps.version.outputs.version }}
+          MAC_SIGNED: ${{ secrets.CSC_LINK != '' }}
         run: |
           awk -v v="$VERSION" '
             /^## / { if (found) exit; found = ($2 == v); next }
@@ -78,7 +82,12 @@ jobs:
               echo "Built on [Craft Agents $upstream](https://github.com/craft-ai-agents/craft-agents-oss/releases/tag/v$upstream),"
               echo "with this fork's features ([FEATURES.md]($repo/blob/$GITHUB_REF_NAME/FEATURES.md))."
               echo ""
-              echo "Builds are not signed; the [README]($repo#readme) explains how to open them."
+              if [ "$MAC_SIGNED" = "true" ]; then
+                echo "The macOS build is signed and notarized. Windows and Linux builds are not signed;"
+                echo "the [README]($repo#readme) explains how to open them."
+              else
+                echo "Builds are not signed; the [README]($repo#readme) explains how to open them."
+              fi
             } > release-notes.md
           fi
           cat release-notes.md
@@ -118,11 +127,21 @@ jobs:
       - name: Build DMG and zip (arm64)
         # Staging keeps electron-builder from scanning the whole workspace node_modules,
         # which can run out of memory on small runners.
+        # With CSC_LINK, electron-builder imports the Developer ID certificate into a temporary
+        # keychain and signs with it; the APPLE_* values turn on notarization (build-dmg.sh).
+        # A missing secret is an empty value, which leaves that part off.
         env:
           CRAFT_DMG_STAGING: "1"
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         run: bash apps/electron/scripts/build-dmg.sh arm64
 
       - name: Check the app bundle
+        env:
+          MAC_SIGNED: ${{ secrets.CSC_LINK != '' }}
         run: |
           app="$(find apps/electron/release -maxdepth 2 -name '*.app' -type d | head -1)"
           echo "App: $app"
@@ -142,7 +161,20 @@ jobs:
             [ ! -e "$app/Contents/Resources/app/dist/resources/$dup" ] || { echo "::error::$dup packaged twice (dist/resources)"; exit 1; }
           done
           codesign --verify --deep --strict "$app"
-          codesign -dv "$app" 2>&1 | grep -E '^(Identifier|Signature)'
+          codesign -dv "$app" 2>&1 | grep -E '^(Identifier|Signature|TeamIdentifier)'
+          if [ "$MAC_SIGNED" = "true" ]; then
+            # A certificate without notarization would still be blocked by Gatekeeper.
+            info="$(codesign -dv --verbose=2 "$app" 2>&1)"
+            grep -q '^Authority=Developer ID Application:' <<<"$info" \
+              || { echo "::error::Not signed with a Developer ID Application certificate"; exit 1; }
+            xcrun stapler validate "$app" || { echo "::error::No notarization ticket stapled"; exit 1; }
+            assess="$(spctl --assess --type execute -vv "$app" 2>&1)" || true
+            grep -q 'source=Notarized Developer ID' <<<"$assess" \
+              || { echo "$assess"; echo "::error::Gatekeeper does not accept the app"; exit 1; }
+            echo "Signed with Developer ID and notarized"
+          else
+            echo "::notice::CSC_LINK secret not set: the macOS build is not signed"
+          fi
 
       - name: Upload
         uses: actions/upload-artifact@v4
