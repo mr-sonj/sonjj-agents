@@ -26,6 +26,16 @@ export interface SearchProviderAuthConfig {
   credential?: SearchProviderCredential;
 }
 
+export interface SearchProviderOptions {
+  /**
+   * The connection talks to a user-configured endpoint (`customEndpoint` + base URL). Its
+   * provider (`openai`/`anthropic`) only picks the auth header format and its key belongs to
+   * that endpoint, so provider-native search would send the key to the real provider and
+   * fail with 401 on every call. Custom endpoints always search with DuckDuckGo.
+   */
+  customEndpoint?: boolean;
+}
+
 function getApiKey(piAuth?: SearchProviderAuthConfig): string | undefined {
   if (piAuth?.credential?.type !== 'api_key') return undefined;
   return typeof piAuth.credential.key === 'string' && piAuth.credential.key.length > 0
@@ -54,7 +64,8 @@ function getOpenAiCodexAccessToken(piAuth?: SearchProviderAuthConfig): string | 
  *   by the ChatGPT backend provider to search with a model the account actually supports,
  *   instead of a hardcoded one that may have been retired (craft-agents-oss#1023).
  */
-export function resolveSearchProvider(piAuth?: SearchProviderAuthConfig, activeModel?: string): WebSearchProvider {
+export function resolveSearchProvider(piAuth?: SearchProviderAuthConfig, activeModel?: string, options?: SearchProviderOptions): WebSearchProvider {
+  if (options?.customEndpoint) return new DDGSearchProvider();
   const provider = piAuth?.provider;
   const apiKey = getApiKey(piAuth);
   const openAiCodexAccess = getOpenAiCodexAccessToken(piAuth);
