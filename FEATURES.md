@@ -10,6 +10,7 @@ Each feature lives on its own branch, based on `main` (a clean copy of upstream)
 | `feature/custom-tweaks` | New sessions remember the last working directory |
 | `feature/agents-md-discovery` | `AGENTS.md` from working directories outside the workspace |
 | `fix/gemini-vertex-tool-schemas` | Tool schemas that Gemini and Vertex AI accept |
+| `fix/custom-endpoint-web-search` | Web search that works on custom OpenAI/Anthropic-compatible endpoints |
 | `feature/lan-remote-server` | Reliable connection to a self-hosted server on the LAN |
 | `fix/self-build` | Building and packaging the app yourself, outside the upstream release pipeline |
 | `feature/fork-branding` | Release builds named Sonjj Agents, no updates from Craft |
@@ -58,6 +59,20 @@ single-value `enum`. Without this, Gemini models reject the tool list.
 
 Main files: `packages/session-tools-core/src/tool-defs.ts`,
 `packages/pi-agent-server/src/craft-metadata-schema.ts`, `patches/@earendil-works%2Fpi-ai@*.patch`.
+
+## Web search on custom endpoints
+
+Branch: `fix/custom-endpoint-web-search`
+
+A connection to a custom OpenAI- or Anthropic-compatible endpoint (a local proxy, vLLM, a gateway) is
+stored with the provider `openai` or `anthropic` only to pick the auth header format. Upstream's
+`web_search` took that as a real OpenAI key: every search sent the endpoint's key to
+`api.openai.com`, failed with 401, and only then fell back to DuckDuckGo, with the error in every
+result. Custom endpoints now search with DuckDuckGo directly. The OpenAI, OpenRouter and Google presets
+keep their provider's own search.
+
+Main files: `packages/pi-agent-server/src/tools/search/resolve-provider.ts`,
+`packages/pi-agent-server/src/index.ts`.
 
 ## Self-hosted server on the LAN
 
