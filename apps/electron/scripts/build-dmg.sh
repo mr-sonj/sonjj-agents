@@ -60,6 +60,8 @@ Environment variables (from .env or environment):
   S3_VERSIONS_BUCKET_*      - S3 credentials (for --upload)
   CRAFT_DMG_STAGING=1       - Package from a staging copy outside the workspace
                               (avoids electron-builder running out of memory)
+  CSC_IDENTITY_AUTO_DISCOVERY=false - Do not sign with a keychain identity; arm64
+                              builds get an ad-hoc signature (default: true)
 EOF
     exit 0
 }
@@ -243,7 +245,10 @@ echo "Packaging app with electron-builder..."
 cd "$BUILDER_DIR"
 
 # Set up environment for electron-builder
-export CSC_IDENTITY_AUTO_DISCOVERY=true
+# A value already in the environment wins: CSC_IDENTITY_AUTO_DISCOVERY=false keeps
+# electron-builder from signing with whatever identity the keychain holds (an Xcode
+# "Apple Development" certificate qualifies), and arm64 builds get an ad-hoc signature.
+export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-true}"
 
 # Build electron-builder arguments
 # Name the targets: electron-builder ignores --${ARCH} for targets that list their
