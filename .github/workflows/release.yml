@@ -105,7 +105,9 @@ jobs:
 
   mac:
     needs: prepare
-    runs-on: macos-latest
+    # macos-15 (arm64), not macos-latest: the macos-26 pool behind macos-latest often has no free
+    # runner and the job is cancelled after waiting ("not acquired by Runner").
+    runs-on: macos-15
     timeout-minutes: 60
     steps:
       - name: Checkout
@@ -328,7 +330,7 @@ jobs:
           - os: ubuntu-latest
             platform: linux
             arch: x64
-          - os: macos-latest
+          - os: macos-15
             platform: darwin
             arch: arm64
     runs-on: ${{ matrix.os }}
