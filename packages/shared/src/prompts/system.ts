@@ -1,9 +1,10 @@
 import { formatPreferencesForPrompt, getCoAuthorPreference } from '../config/preferences.ts';
 import { getBrowserToolEnabled, getRtkEnabled } from '../config/storage.ts';
 import { getRtkPath } from '../agent/core/rtk-detector.ts';
+import { loadWorkspaceConfig } from '../workspaces/storage.ts';
 import { debug } from '../utils/debug.ts';
-import { existsSync, readFileSync, readdirSync, type Dirent } from 'fs';
-import { join, relative, basename, resolve } from 'path';
+import { existsSync, readFileSync, readdirSync, statSync, type Dirent } from 'fs';
+import { isAbsolute, join, relative, basename, resolve, dirname } from 'path';
 import { DOC_REFS, APP_ROOT } from '../docs/index.ts';
 import { PERMISSION_MODE_CONFIG } from '../agent/mode-types.ts';
 import { FEATURE_FLAGS } from '../feature-flags.ts';
@@ -297,6 +298,104 @@ export function readProjectContextFile(directory: string): { filename: string; c
   return null;
 }
 
+function isSameOrChildPath(parent: string, child: string): boolean {
+  const rel = relative(parent, child);
+  return rel === '' || (!rel.startsWith('..') && !isAbsolute(rel));
+}
+
+type ProjectContextDirectoryLabel = 'context root' | 'repository root' | 'parent context' | 'working directory';
+
+/**
+ * Directories whose context files apply to the selected working directory, root first:
+ * at most 3 levels, the root, the selection's parent and the selection; folders between
+ * the root and the parent are skipped so deep trees stay short. The root is the context
+ * root, also when the selection lies outside it; without one it is the selection's git
+ * repository root, else the selection itself.
+ */
+function getProjectContextSearchDirectories(
+  workingDirectory: string,
+  contextRootPath?: string,
+): Array<{ directory: string; label: ProjectContextDirectoryLabel }> {
+  const selectedDir = resolve(workingDirectory);
+  const rootDir = contextRootPath ? resolve(contextRootPath) : undefined;
+  const gitRoot = findGitRepositoryRoot(selectedDir) ?? undefined;
+  const baseDir = rootDir ?? gitRoot ?? selectedDir;
+
+  const chain = [baseDir];
+  if (selectedDir !== baseDir) {
+    const parentDir = dirname(selectedDir);
+    if (parentDir !== baseDir && parentDir !== selectedDir) chain.push(parentDir);
+    chain.push(selectedDir);
+  }
+
+  return chain.map((directory) => ({
+    directory,
+    label: directory === selectedDir
+      ? 'working directory'
+      : directory === rootDir
+        ? 'context root'
+        : directory === gitRoot
+          ? 'repository root'
+          : 'parent context',
+  }));
+}
+
+/**
+ * The context files of one directory, AGENTS.md first, from a single directory read.
+ * When the engine reads this directory and loads its CLAUDE.md itself, that file is left
+ * out, and so is an AGENTS.md that is the same file. The engine opens the exact name
+ * CLAUDE.md, so on a case-sensitive file system a claude.md is not loaded and stays
+ * listed. A CLAUDE.md that is the same file as the AGENTS.md beside it is listed once.
+ */
+function findContextFilesInDirectory(directory: string, engineReadsDirectory: boolean): string[] {
+  let entries: string[];
+  try {
+    entries = readdirSync(directory);
+  } catch {
+    return [];
+  }
+
+  const agentsFile = entries.find((name) => name.toLowerCase() === 'agents.md');
+  const claudeFile = entries.find((name) => name.toLowerCase() === 'claude.md');
+  const engineLoadsClaudeFile = engineReadsDirectory && claudeFile !== undefined &&
+    (claudeFile === 'CLAUDE.md' || isSameFile(join(directory, claudeFile), join(directory, 'CLAUDE.md')));
+  if (agentsFile && claudeFile && isSameFile(join(directory, agentsFile), join(directory, claudeFile))) {
+    return engineLoadsClaudeFile ? [] : [agentsFile];
+  }
+
+  const files: string[] = [];
+  if (agentsFile) files.push(agentsFile);
+  if (claudeFile && !engineLoadsClaudeFile) files.push(claudeFile);
+  return files;
+}
+
+/**
+ * Whether two paths open the same file: through links, and through a case alias on a
+ * case-insensitive file system. Compares device and inode, since Node's realpathSync
+ * keeps the casing it was given while Bun's returns the casing on disk.
+ */
+function isSameFile(a: string, b: string): boolean {
+  try {
+    const statA = statSync(a, { bigint: true });
+    const statB = statSync(b, { bigint: true });
+    return statA.dev === statB.dev && statA.ino === statB.ino;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The workspace's default working directory, used as the context root. The workspace
+ * root itself is Craft's storage folder, never a project, so it is not a fallback.
+ */
+function getProjectContextRootDirectory(workspaceRootPath?: string): string | undefined {
+  if (!workspaceRootPath) {
+    return undefined;
+  }
+
+  return loadWorkspaceConfig(workspaceRootPath)?.defaults?.workingDirectory || undefined;
+}
+
 /**
  * Get the working directory context string for injection into user messages.
  * Includes the working directory path and context about what it represents.
@@ -373,47 +472,40 @@ export interface DebugModeConfig {
 
 /**
  * Get the project context files prompt section for the system prompt.
- * Lists all discovered context files (AGENTS.md, CLAUDE.md) in the working directory.
- * For monorepos, this includes nested package context files.
+ * Lists the context files (AGENTS.md, CLAUDE.md) of each directory from
+ * getProjectContextSearchDirectories() that has them.
+ *
+ * @param claudeEngineCwd - cwd of a Claude engine that loads CLAUDE.md files itself, from
+ *   this folder and every ancestor of it; those files are already in context and left out.
+ *   Undefined when nothing loads them (Pi, or the engine's loading turned off).
  * Returns empty string if no working directory or no context files found.
  */
-export function getProjectContextFilesPrompt(workingDirectory?: string): string {
+export function getProjectContextFilesPrompt(
+  workingDirectory?: string,
+  contextRootPath?: string,
+  claudeEngineCwd?: string,
+): string {
   if (!workingDirectory) {
     return '';
   }
 
-  const { contextRoot, contextFiles } = findRelevantProjectContextFiles(workingDirectory);
-  if (contextFiles.length === 0) {
+  const engineCwd = claudeEngineCwd ? resolve(claudeEngineCwd) : undefined;
+  const fileLines: string[] = [];
+  for (const { directory, label } of getProjectContextSearchDirectories(workingDirectory, contextRootPath)) {
+    const engineReadsDirectory = engineCwd !== undefined && isSameOrChildPath(directory, engineCwd);
+    for (const filename of findContextFilesInDirectory(directory, engineReadsDirectory)) {
+      fileLines.push(`- ${sanitizePromptLine(join(directory, filename), PROJECT_CONTEXT_FILES_TAGS)} (${label})`);
+    }
+  }
+
+  if (fileLines.length === 0) {
     return '';
   }
 
-  // Format file list with (root) annotation for top-level files. Paths are
-  // relative to contextRoot, which may be a git repository root when the
-  // selected working directory is nested inside a repo.
-  const fileList = contextFiles
-    .map((file) => {
-      const sanitized = sanitizePromptLine(file, PROJECT_CONTEXT_FILES_TAGS);
-      const isRoot = !sanitized.includes('/');
-      return `- ${sanitized}${isRoot ? ' (root)' : ''}`;
-    })
-    .join('\n');
-
-  const workingDirectoryAttr = escapePromptXmlAttr(workingDirectory);
-  const contextRootAttr = escapePromptXmlAttr(contextRoot);
-
   return `
-<project_context_files working_directory="${workingDirectoryAttr}" context_root="${contextRootAttr}">
-${fileList}
+<project_context_files working_directory="${escapePromptXmlAttr(workingDirectory)}">
+${fileLines.join('\n')}
 </project_context_files>`;
-}
-
-function findRelevantProjectContextFiles(workingDirectory: string): { contextRoot: string; contextFiles: string[] } {
-  const resolvedWorkingDirectory = resolve(workingDirectory);
-  const gitRoot = findGitRepositoryRoot(resolvedWorkingDirectory);
-  // Root instructions, the selected CWD's ancestors and its subtree. This keeps
-  // nested package sessions useful without reading every unrelated monorepo package.
-  const contextRoot = gitRoot ? resolve(gitRoot) : resolvedWorkingDirectory;
-  return { contextRoot, contextFiles: findAllProjectContextFiles(resolvedWorkingDirectory, contextRoot) };
 }
 
 function normalizePromptPath(value: string): string {
@@ -485,6 +577,7 @@ Use config_validate to verify changes match the expected schema.
  * @param backendName - Backend name for "powered by X" text (default: 'Claude Code')
  * @param agentProfile - 'coding' swaps the Craft Agent base prompt for the lean coding prompt;
  *   preferences, project context, debug mode and context files are appended either way
+ * @param claudeEngineCwd - cwd of a Claude engine that loads CLAUDE.md files itself (see getProjectContextFilesPrompt)
  */
 export function getSystemPrompt(
   pinnedPreferencesPrompt?: string,
@@ -496,6 +589,7 @@ export function getSystemPrompt(
   includeCoAuthoredBy?: boolean,
   projectContext?: ProjectPromptContext,
   agentProfile?: AgentProfile,
+  claudeEngineCwd?: string,
 ): string {
   // Use mini agent prompt for quick edits (pass workspace root for config paths)
   if (preset === 'mini') {
@@ -507,8 +601,11 @@ export function getSystemPrompt(
   const preferences = pinnedPreferencesPrompt ?? formatPreferencesForPrompt();
   const debugContext = debugMode?.enabled ? formatDebugModeContext(debugMode.logFilePath) : '';
 
-  // Get project context files for monorepo support (lives in system prompt for persistence across compaction)
-  const projectContextFiles = getProjectContextFilesPrompt(workingDirectory);
+  // Get project context files (lives in system prompt for persistence across compaction).
+  // The context root is the configured default working directory; without one the git root of the
+  // working directory is used. workspaceRootPath is Craft's storage folder and never a context root.
+  const projectContextRootDirectory = getProjectContextRootDirectory(workspaceRootPath);
+  const projectContextFiles = getProjectContextFilesPrompt(workingDirectory, projectContextRootDirectory, claudeEngineCwd);
 
   // Optional workspace-project context (injected after preferences, before debug+context-files)
   const projectBlock = projectContext ? formatProjectContextForPrompt(projectContext) : '';
@@ -920,9 +1017,11 @@ Create new skills in \`${skillsPath}/{slug}/\` unless the user asks for a projec
 
 ## Project Context
 
-When \`<project_context_files>\` appears in the system prompt, it lists discovered context files (CLAUDE.md, AGENTS.md). In git repositories, paths are relative to \`context_root\` and are filtered toward the selected working directory so monorepo package sessions still see root and path-specific guidance.
+When \`<project_context_files>\` appears in the system prompt, it lists the context files (AGENTS.md, CLAUDE.md) that apply to the working directory, root first, in three levels: the root, the parent folder of the working directory, and the working directory. The root is the context root (the workspace default working directory), also when the working directory is outside it; without a context root it is the git repository root. Folders between the root and the parent are not listed. CLAUDE.md files already loaded into your context are not listed.
 
-Read relevant context files using the Read tool - they contain architecture info, conventions, and project-specific guidance. Read the root file first, then path/package-specific files as needed.
+**CRITICAL INSTRUCTION**: Listed files are NOT loaded into your context automatically. You MUST read ALL of them using the Read tool, from root to working directory, before acting (skip one whose contents already appear in your context, e.g. through a CLAUDE.md \`@AGENTS.md\` import), and read a file again when its contents are no longer in your context (e.g. after compaction).
+**Subfolders**: When the task moves into a subfolder of the working directory that has its own AGENTS.md (or CLAUDE.md), read that file before working there.
+**Priority Rule**: The closest file to the working directory wins. Rules in the working directory override parent rules, and parent rules override root rules.
 
 ## Configuration Documentation
 
