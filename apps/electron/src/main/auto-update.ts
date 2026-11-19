@@ -15,16 +15,13 @@
  */
 
 import { autoUpdater } from 'electron-updater'
-import { app, BrowserWindow } from 'electron'
+import { app, BrowserWindow, shell } from 'electron'
 import { platform } from 'os'
 import * as path from 'path'
 import * as fs from 'fs'
 import { mainLog, autoUpdateLog } from './logger'
 import { getAppVersion } from '@craft-agent/shared/version'
-import {
-  getDismissedUpdateVersion,
-  clearDismissedUpdateVersion,
-} from '@craft-agent/shared/config'
+import { clearDismissedUpdateVersion } from '@craft-agent/shared/config'
 import { readJsonFileSync } from '@craft-agent/shared/utils/files'
 import { RPC_CHANNELS, type UpdateInfo } from '../shared/types'
 import type { EventSink } from '@craft-agent/server-core/transport'
@@ -350,56 +347,18 @@ function checkForExistingDownload(): { exists: boolean; version?: string } {
   }
 }
 
+// This fork has no update feed: the Craft feed would install the official release over the
+// modded build, and unsigned builds cannot update in place. A manual check opens the fork's
+// releases page instead.
+const RELEASES_URL = 'https://github.com/mr-sonj/sonjj-agents/releases'
+
 /**
- * Check for available updates.
- * Returns the current UpdateInfo state after check completes.
- *
- * @param options.autoDownload - If false, only checks without downloading (for manual "Check Now")
+ * Handle a user-initiated update check by opening the releases page.
+ * Returns the current UpdateInfo state (never reports an available update).
  */
-export async function checkForUpdates(options: CheckOptions = {}): Promise<UpdateInfo> {
-  const { autoDownload = true } = options
-
-  // Temporarily override autoDownload for this check if needed
-  // (e.g., manual check from settings shouldn't auto-download on metered connections)
-  const previousAutoDownload = autoUpdater.autoDownload
-  autoUpdater.autoDownload = autoDownload
-
-  try {
-    // Check for updates - this returns a promise that resolves with the check result
-    const result = await autoUpdater.checkForUpdates()
-
-    // If update is available and was already downloaded, the update-downloaded event
-    // should fire. Wait a moment for events to settle before returning.
-    if (result?.updateInfo) {
-      // Give electron-updater time to fire update-downloaded if file exists
-      await new Promise(resolve => setTimeout(resolve, 500))
-
-      // Double-check: if we're still showing 'downloading' but file exists, update state
-      if (updateInfo.downloadState === 'downloading') {
-        const existing = checkForExistingDownload()
-        if (existing.exists) {
-          mainLog.info('[auto-update] Update already downloaded, updating state to ready')
-          updateInfo = {
-            ...updateInfo,
-            downloadState: 'ready',
-            downloadProgress: 100,
-          }
-          broadcastUpdateInfo()
-        }
-      }
-    }
-  } catch (error) {
-    autoUpdateLog.error('Update check failed', error)
-    updateInfo = {
-      ...updateInfo,
-      downloadState: 'error',
-      error: error instanceof Error ? error.message : 'Check failed',
-    }
-  } finally {
-    // Restore previous autoDownload setting
-    autoUpdater.autoDownload = previousAutoDownload
-  }
-
+export async function checkForUpdates(_options: CheckOptions = {}): Promise<UpdateInfo> {
+  autoUpdateLog.info(`Opening releases page: ${RELEASES_URL}`)
+  await shell.openExternal(RELEASES_URL)
   return getUpdateInfo()
 }
 
@@ -473,43 +432,4 @@ export async function installUpdate(): Promise<void> {
     }
     throw error
   }
-}
-
-/**
- * Result of update check on launch
- */
-export interface UpdateOnLaunchResult {
-  action: 'none' | 'skipped' | 'ready' | 'downloading'
-  reason?: string
-  version?: string | null
-}
-
-/**
- * Check for updates on app launch.
- * - Checks immediately (no delay)
- * - Respects dismissed version (skips notification but allows manual check)
- * - Auto-downloads if update available
- */
-export async function checkForUpdatesOnLaunch(): Promise<UpdateOnLaunchResult> {
-  autoUpdateLog.info('Checking for updates on launch...')
-
-  const info = await checkForUpdates({ autoDownload: true })
-
-  if (!info.available) {
-    return { action: 'none' }
-  }
-
-  // Check if this version was dismissed by user
-  const dismissedVersion = getDismissedUpdateVersion()
-  if (dismissedVersion === info.latestVersion) {
-    mainLog.info(`[auto-update] Update ${info.latestVersion} was dismissed, skipping notification`)
-    return { action: 'skipped', reason: 'dismissed', version: info.latestVersion }
-  }
-
-  if (info.downloadState === 'ready') {
-    return { action: 'ready', version: info.latestVersion }
-  }
-
-  // Download in progress — will notify when ready via update-downloaded event
-  return { action: 'downloading', version: info.latestVersion }
 }
