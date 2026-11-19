@@ -632,12 +632,13 @@ async function ensureSession(): Promise<AgentSession> {
   // account supports instead of a hardcoded one (craft-agents-oss#1023). Resolved per call
   // (alongside the provider) so set_model / token_update refreshes are picked up live.
   const activeSearchModel = () => (initConfig?.model ? stripPiPrefix(initConfig.model) : undefined);
+  const searchOptions = () => ({ customEndpoint: shouldPreferCustomEndpoint() });
   const searchProvider = {
     get name() {
-      return resolveSearchProvider(initConfig?.piAuth, activeSearchModel()).name;
+      return resolveSearchProvider(initConfig?.piAuth, activeSearchModel(), searchOptions()).name;
     },
     async search(query: string, count: number) {
-      return resolveSearchProvider(initConfig?.piAuth, activeSearchModel()).search(query, count);
+      return resolveSearchProvider(initConfig?.piAuth, activeSearchModel(), searchOptions()).search(query, count);
     },
   };
   const searchTool = createSearchTool(searchProvider);
