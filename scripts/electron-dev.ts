@@ -198,7 +198,7 @@ function copyResources(): void {
 async function buildWaWorker(): Promise<void> {
   console.log("📨 Building WhatsApp worker...");
   const proc = spawn({
-    cmd: ["bun", "run", "scripts/build-wa-worker.ts"],
+    cmd: [process.execPath, "run", "scripts/build-wa-worker.ts"],
     cwd: ROOT_DIR,
     stdout: "inherit",
     stderr: "inherit",
