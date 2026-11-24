@@ -214,7 +214,7 @@ done
 # 6. Build Electron app
 echo "Building Electron app..."
 cd "$ROOT_DIR"
-# CRAFT_BUILD_ARCH picks the koffi native binary bundled with pi-agent-server
+# CRAFT_BUILD_ARCH picks the uv binary downloaded for the packaged app
 CRAFT_BUILD_ARCH="$ARCH" bun run electron:build
 
 # 7. Package with electron-builder
@@ -253,7 +253,7 @@ export CSC_IDENTITY_AUTO_DISCOVERY="${CSC_IDENTITY_AUTO_DISCOVERY:-true}"
 # Build electron-builder arguments
 # Name the targets: electron-builder ignores --${ARCH} for targets that list their
 # own arch in electron-builder.yml, and would also package the other arch with this
-# arch's bun/claude/koffi binaries (an app that cannot run).
+# arch's bun/claude/uv binaries (an app that cannot run).
 BUILDER_ARGS="--mac dmg zip --${ARCH}"
 
 # Add code signing if identity is available

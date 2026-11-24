@@ -838,7 +838,7 @@ async function main(): Promise<void> {
     electronDir,
   };
   buildSubprocessServers(buildConfig);
-  // Stage it in apps/electron/resources (with koffi for the target platform);
+  // Stage the bundle in apps/electron/resources;
   // assembleResources copies it to resources/pi-agent-server, where the
   // runtime resolver looks in packaged builds.
   copyPiAgentServer(buildConfig);

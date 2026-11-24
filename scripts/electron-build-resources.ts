@@ -24,7 +24,7 @@ const buildConfig: BuildConfig = {
 
 // electron-builder.yml packages resources/pi-agent-server/**, which the packaged
 // runtime resolves (runtime-resolver.ts). electron-build-main.ts builds the bundle
-// into packages/pi-agent-server/dist; copy it in with koffi for the target arch.
+// into packages/pi-agent-server/dist; copy it in.
 copyPiAgentServer(buildConfig);
 
 // The doc tools in resources/bin run through uv from resources/bin/<platform>-<arch>.
