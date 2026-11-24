@@ -11,6 +11,7 @@ Each feature lives on its own branch, based on `main` (a clean copy of upstream)
 | `feature/agents-md-discovery` | `AGENTS.md` from working directories outside the workspace |
 | `fix/gemini-vertex-tool-schemas` | Tool schemas that Gemini and Vertex AI accept |
 | `fix/custom-endpoint-web-search` | Web search that works on custom OpenAI/Anthropic-compatible endpoints |
+| `fix/openai-sse-finish-reason` | Tool calls through proxies that end the stream on the last tool chunk |
 | `feature/lan-remote-server` | Reliable connection to a self-hosted server on the LAN |
 | `fix/self-build` | Building and packaging the app yourself, outside the upstream release pipeline |
 | `feature/fork-branding` | Release builds named Sonjj Agents, no updates from Craft |
@@ -73,6 +74,19 @@ keep their provider's own search.
 
 Main files: `packages/pi-agent-server/src/tools/search/resolve-provider.ts`,
 `packages/pi-agent-server/src/index.ts`.
+
+## Tool calls through OpenAI-compatible proxies
+
+Branch: `fix/openai-sse-finish-reason`
+
+Some OpenAI-compatible proxies (Gemini behind a CLI proxy, for example) send the last piece of a tool
+call's arguments and `finish_reason` in the same stream chunk. Upstream's stream filter held back every
+chunk with tool calls, so that chunk was dropped, the SDK never saw `finish_reason`, and the turn
+failed with "Connection Error" (`Stream ended without finish_reason`). The filter now sends the tool
+calls, then the chunk with its `finish_reason`.
+
+Main files: `packages/shared/src/unified-network-interceptor.ts`, test in
+`packages/shared/src/__tests__/unified-network-interceptor.finish-reason.test.ts`.
 
 ## Self-hosted server on the LAN
 

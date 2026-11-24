@@ -25,6 +25,7 @@ FEATURES=(
     "feature/custom-tweaks"
     "feature/agents-md-discovery"
     "fix/custom-endpoint-web-search"
+    "fix/openai-sse-finish-reason"
     "fork/meta"
 )
 
