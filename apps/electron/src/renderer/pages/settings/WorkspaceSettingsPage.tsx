@@ -520,7 +520,7 @@ export default function WorkspaceSettingsPage() {
         )}
       </SettingsSection>
 
-      {/* Folders a session's first message may move to (decision toggle autoWorkingDirectory) */}
+      {/* Auto working directory: its switch and the folders a session's first message may move to */}
       <AutoWorkingDirectoryFolders key={activeWorkspaceId} workspaceId={activeWorkspaceId} />
 
       {/* Advanced */}
