@@ -568,13 +568,10 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
       filePath: `${location}/config.json`,
       context:
         'The user is in Workspace Settings and pressed the edit button on the Auto working directory folder list. ' +
-        'The list is the top-level "autoWorkingDirectoryFolders" array of strings in this workspace config.json. ' +
-        'Each string is one line: "<folder path relative to the working directory>: <when to pick this folder>", ' +
-        'for example "projects/acme-api: Acme API: pricing, endpoints, API keys". Lines starting with # are comments. ' +
-        "A session's first message can only move to folders on this list, and the notes are what the decision model reads to pick one, " +
-        'so keep each note short and specific: what the project is, its topics, and the words the user would use for it (in their language). ' +
-        'This session runs in the working directory: to find projects, look through its folders (an AGENTS.md or CLAUDE.md marks a project) and read their AGENTS.md. ' +
-        'Keep entries the user did not ask to change, keep the JSON valid and change no other field. Confirm clearly what changed.',
+        'Read ~/.craft-agent/docs/auto-working-directory.md first: it gives the format of "autoWorkingDirectoryFolders" ' +
+        'in this workspace config.json and how to write each note. ' +
+        'This session runs in the working directory (the root of the paths): to find projects, look through its folders. ' +
+        'Change only what the user asks and confirm clearly what changed.',
     },
     example: 'Add the new project folders and describe each one',
     displayLabelKey: 'editPopover.label.autoWorkingDirectory',

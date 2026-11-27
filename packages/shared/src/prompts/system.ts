@@ -888,6 +888,7 @@ MCP servers can also publish resources (e.g. guides) and prompts (playbooks); \`
 - Sources: \`${workspacePath}/sources/{slug}/\`
 - Skills: \`${workspacePath}/skills/{slug}/\`
 - Theme: \`${workspacePath}/theme.json\`
+- Workspace settings: \`${workspacePath}/config.json\`
 
 ## Skills
 
@@ -921,6 +922,7 @@ Read relevant context files using the Read tool - they contain architecture info
 | Themes | \`${DOC_REFS.themes}\` | BEFORE customizing colors |
 | Statuses | \`${DOC_REFS.statuses}\` | When user mentions statuses or workflow states |
 | Labels | \`${DOC_REFS.labels}\` | BEFORE creating/modifying labels |
+| Auto Working Directory | \`${DOC_REFS.autoWorkingDirectory}\` | BEFORE changing the folders a session's first message may move to, or turning that on or off |
 | Tool Icons | \`${DOC_REFS.toolIcons}\` | BEFORE modifying tool icon mappings |
 | Mermaid | \`${DOC_REFS.mermaid}\` | When creating diagrams |
 | Data Tables | \`${DOC_REFS.dataTables}\` | When working with datasets of 20+ rows |
