@@ -152,6 +152,8 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
       chatStarters: config?.chatStarters ?? [],
+      // Only a stored `true` is on (a hand-written "true" is not)
+      autoWorkingDirectory: config?.autoWorkingDirectory === true,
       autoWorkingDirectoryFolders: config?.autoWorkingDirectoryFolders ?? [],
       // Lines naming no usable folder, shown under the list (paths are relative to the working directory)
       autoWorkingDirectoryIssues: config?.autoWorkingDirectoryFolders?.length && config.defaults?.workingDirectory
@@ -163,6 +165,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
   // Update a workspace setting
   server.handle(RPC_CHANNELS.workspace.SETTINGS_UPDATE, async (_ctx, workspaceId: string, key: string, value: unknown) => {
     if (key === 'autoWorkingDirectoryFolders') return saveAutoWorkingDirectoryFolders(workspaceId, value, deps)
+    if (key === 'autoWorkingDirectory') return saveAutoWorkingDirectorySwitch(workspaceId, value, deps)
     const workspace = getWorkspaceOrThrow(workspaceId)
     const normalizedValue = key === 'workingDirectory' && typeof value === 'string'
       ? value.trim()
@@ -433,4 +436,17 @@ async function saveAutoWorkingDirectoryFolders(workspaceId: string, value: unkno
   else delete config.autoWorkingDirectoryFolders
   saveWorkspaceConfig(workspace.rootPath, config)
   deps.platform.logger.info(`Workspace setting updated: autoWorkingDirectoryFolders (${lines.length} lines)`)
+}
+
+/** Auto working directory switch (top-level `autoWorkingDirectory`): stored as `true`, removed when off. */
+async function saveAutoWorkingDirectorySwitch(workspaceId: string, value: unknown, deps: HandlerDeps): Promise<void> {
+  if (typeof value !== 'boolean') throw new Error('autoWorkingDirectory must be true or false')
+  const workspace = getWorkspaceOrThrow(workspaceId)
+  const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+  const config = loadWorkspaceConfig(workspace.rootPath)
+  if (!config) throw new Error(`Failed to load workspace config: ${workspaceId}`)
+  if (value) config.autoWorkingDirectory = true
+  else delete config.autoWorkingDirectory
+  saveWorkspaceConfig(workspace.rootPath, config)
+  deps.platform.logger.info(`Workspace setting updated: autoWorkingDirectory (${value ? 'on' : 'off'})`)
 }

@@ -177,7 +177,6 @@ export const DECISION_RECORD_TAGS: Record<DecisionLayerFeature, string> = {
   largeResults: 'large_results',
   suggestions: 'suggestions',
   subagentModels: 'subagent_models',
-  autoWorkingDirectory: 'auto_working_directory',
 };
 
 /** What Settings shows per toggle: checks, failures and how often an answer changed something. */

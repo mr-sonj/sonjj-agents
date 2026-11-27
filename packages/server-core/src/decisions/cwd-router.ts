@@ -1,5 +1,5 @@
 /**
- * Auto working directory via the decision model (feature toggle `autoWorkingDirectory`).
+ * Auto working directory (the workspace switch `autoWorkingDirectory` in its config.json).
  *
  * On a session's first message, before its agent exists, pick the project folder the message is
  * about, so the system prompt's project context files and the shell start there exactly as if
@@ -10,9 +10,11 @@
  * paths relative to the context root, the workspace's `defaults.workingDirectory`), each with a
  * note on when to pick it; a listed folder's AGENTS.md/CLAUDE.md adds to that note. Hard signals
  * are checked first: a path in the message or an attachment, then a listed folder's name in the
- * message (words in the notes are never hard signals). The model is asked (one call: does the
- * message belong where the session is, and which folder is it about) only when they do not
- * settle it. Only paths relative to the root reach the provider.
+ * message (words in the notes are never hard signals). A model is asked only when they do not
+ * settle it: the decision model (Jev) when the decision layer is on (one call: does the message
+ * belong where the session is, and which folder is it about), else the session connection's
+ * small model (`askMiniModel`), which answers with one folder key and no confidence, so a hard
+ * signal stands in for the thresholds. Only paths relative to the root reach either provider.
  *
  * SessionManager decides when this runs and applies the result; apart from reading the listed
  * folders this module has no side effects.
@@ -46,6 +48,8 @@ export const MESSAGE_MAX_CHARS = 2_000
 export const DESCRIPTION_MAX_CHARS = 200
 /** Characters of a folder's note in the list sent to the model. */
 export const NOTE_MAX_CHARS = 400
+/** The longest wait for the small model's pick (a Claude connection starts a CLI process per call). */
+export const MINI_MODEL_DEADLINE_MS = 8_000
 
 /** Bytes read from a context file for its description. */
 const CONTEXT_FILE_READ_BYTES = 16 * 1024
@@ -56,6 +60,11 @@ const DESCRIPTION_FIELDS = ['project_role', 'description', 'title']
 const STAY = 'stay'
 const UNCLEAR = 'unclear'
 const ROOT_LABEL = '(root)'
+
+const BELONGS_HERE_INSTRUCTIONS = 'Is this message about the work described in `current`? A short follow-up like "continue", "check that again" counts as yes.'
+const TARGET_INSTRUCTIONS = 'Which project folder is this message about?'
+const STAY_CRITERION = 'Not clearly about any listed folder, or about the current one'
+const UNCLEAR_CRITERION = 'Cannot tell'
 
 export interface CwdCandidate {
   /** Path below the root with `/` separators, e.g. `projects/acme`: the option key sent to the model. */
@@ -90,6 +99,8 @@ export interface CwdRoute {
   /** The picked folder below the root, also when a rule kept the session where it is. */
   to?: string
   rule?: CwdStayRule
+  /** Which model was asked: the decision model or the connection's small model. */
+  via?: 'jev' | 'mini_model'
 }
 
 export interface CwdRouterInput {
@@ -109,6 +120,14 @@ export interface CwdRouterDeps extends DecisionPointDeps {
   isValidDirectory?: (path: string) => boolean
   /** Expands `~` in paths (default: the user's home). */
   homeDir?: string
+  /**
+   * The session connection's small model, asked when the decision model is off or unavailable:
+   * the prompt in, its reply out (`null` for none). Without it the router stays put then.
+   * `signal` aborts when the router stops waiting.
+   */
+  askMiniModel?: (prompt: string, signal: AbortSignal) => Promise<string | null>
+  /** How long to wait for `askMiniModel` (default `MINI_MODEL_DEADLINE_MS`). */
+  miniModelDeadlineMs?: number
 }
 
 // ── Paths ───────────────────────────────────────────────────────────────
@@ -454,8 +473,8 @@ export function buildCwdRouterRequest(input: {
   const message = input.message.length > MESSAGE_MAX_CHARS ? `${input.message.slice(0, MESSAGE_MAX_CHARS)}…` : input.message
   const criteria: Record<string, string | null> = {}
   for (const option of input.options) criteria[option.key] = option.description || null
-  criteria[STAY] = 'Not clearly about any listed folder, or about the current one'
-  criteria[UNCLEAR] = 'Cannot tell'
+  criteria[STAY] = STAY_CRITERION
+  criteria[UNCLEAR] = UNCLEAR_CRITERION
   return {
     state: {
       message,
@@ -464,10 +483,119 @@ export function buildCwdRouterRequest(input: {
     },
     questions: {
       ...(input.askBelongsHere
-        ? { belongs_here: { type: 'noul' as const, instructions: 'Is this message about the work described in `current`? A short follow-up like "continue", "check that again" counts as yes.' } }
+        ? { belongs_here: { type: 'noul' as const, instructions: BELONGS_HERE_INSTRUCTIONS } }
         : {}),
-      target: { type: 'choice', instructions: 'Which project folder is this message about?', criteria },
+      target: { type: 'choice', instructions: TARGET_INSTRUCTIONS, criteria },
     },
+  }
+}
+
+/**
+ * The small model's prompt: the same state and options as the decision model's request, as text,
+ * asking for one option key back. `askBelongsHere`: away from the root, a follow-up counts as `stay`.
+ */
+export function buildMiniModelPrompt(input: {
+  message: string
+  attachments?: readonly string[]
+  current: { path: string; description: string }
+  options: readonly CwdCandidate[]
+  askBelongsHere: boolean
+}): string {
+  const message = input.message.length > MESSAGE_MAX_CHARS ? `${input.message.slice(0, MESSAGE_MAX_CHARS)}…` : input.message
+  const current = input.current.description ? `${input.current.path} — ${input.current.description}` : input.current.path
+  const stay = input.askBelongsHere
+    ? `${STAY_CRITERION}. A short follow-up like "continue" or "check that again" counts as stay.`
+    : STAY_CRITERION
+  const options = [
+    ...input.options.map(option => (option.description ? `- ${option.key}: ${option.description}` : `- ${option.key}`)),
+    `- ${STAY}: ${stay}`,
+    `- ${UNCLEAR}: ${UNCLEAR_CRITERION}`,
+  ]
+  return [
+    `${TARGET_INSTRUCTIONS} Pick the folder a chat message is about, from the list below.`,
+    '',
+    '<message>',
+    message,
+    '</message>',
+    ...(input.attachments?.length ? [`Attachments: ${input.attachments.join(', ')}`] : []),
+    `Current folder: ${current}`,
+    '',
+    'Folders (key: when to pick it):',
+    ...options,
+    '',
+    'Reply with exactly one key from the list, nothing else.',
+  ].join('\n')
+}
+
+/**
+ * The option key the small model replied with: the whole reply, give or take surrounding quotes,
+ * backticks and a final period, must be one key (`stay` and `unclear` included). `null` otherwise.
+ */
+export function parseMiniModelAnswer(text: string | null | undefined, options: readonly CwdCandidate[]): string | null {
+  if (!text) return null
+  let answer = text.trim()
+  for (let previous = ''; previous !== answer;) {
+    previous = answer
+    answer = answer.replace(/^[`"']+|[`"']+$/g, '').replace(/\.$/, '').trim()
+  }
+  if (!answer) return null
+  const keys = [...options.map(option => option.key), STAY, UNCLEAR]
+  if (keys.includes(answer)) return answer
+  const folded = keys.filter(key => key.toLowerCase() === answer.toLowerCase())
+  return folded.length === 1 ? folded[0]! : null
+}
+
+/**
+ * Apply the route rules to the small model's pick. It gives no confidence, so away from the root a
+ * folder the message names stands in for the decision model's thresholds; from the root its pick
+ * is taken. `named`: candidates named in the message.
+ */
+export function judgeMiniModelAnswer(
+  ctx: CwdRouteContext,
+  choice: string | null,
+  options: readonly CwdCandidate[],
+  named: readonly CwdCandidate[],
+): CwdRoute {
+  const via = 'mini_model' as const
+  if (choice === STAY || choice === UNCLEAR) return stay(ctx, 'model', 'stay_or_unclear', { via })
+  const target = choice ? options.find(option => option.key === choice) : undefined
+  if (!target) return stay(ctx, 'model', 'no_answer', { via })
+  const nameHit = named.some(candidate => candidate.key === target.key)
+  const reason = nameHit ? 'name' : 'model'
+  const picked = { to: target.key, via }
+  if (!ctx.atRoot) {
+    if (sameBranch(ctx, target)) return stay(ctx, reason, 'same_branch', picked)
+    if (!nameHit) return stay(ctx, reason, 'no_hard_signal', picked)
+  }
+  if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
+  return { action: 'route', target: target.path, reason, from: ctx.from, ...picked }
+}
+
+/** The small model's reply, or `null` on an error or when it takes longer than `deadlineMs` (the call is then aborted). */
+async function askMiniModelWithin(
+  ask: NonNullable<CwdRouterDeps['askMiniModel']>,
+  prompt: string,
+  deadlineMs: number,
+  log?: (message: string) => void,
+): Promise<string | null> {
+  const tag = '[auto_working_directory]'
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => {
+      log?.(`${tag} small model: no answer within ${deadlineMs} ms`)
+      controller.abort()
+      resolve(null)
+    }, deadlineMs)
+  })
+  const answer = ask(prompt, controller.signal).catch((error: unknown) => {
+    log?.(`${tag} small model failed: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  })
+  try {
+    return await Promise.race([answer, timeout])
+  } finally {
+    clearTimeout(timer)
   }
 }
 
@@ -572,18 +700,21 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
   // Several folders named: the model picks among them. `stay`/`unclear` are reserved option keys.
   const options = (named.length > 1 ? named : candidates).filter(option => option.key !== STAY && option.key !== UNCLEAR)
   if (options.length === 0) return null
-  // The turn start waits for this answer.
-  const decide = await openDecisionPoint({ ...deps, feature: 'autoWorkingDirectory', record: 'auto_working_directory', maxDeadlineMs: FOREGROUND_MAX_DEADLINE_MS, sessionId: input.sessionId })
-  if (!decide) return stay(ctx, 'model', 'no_answer')
-  const request = buildCwdRouterRequest({
-    message: input.message,
-    attachments: input.attachments?.map(attachment => (attachment.type ? `${attachment.name} (${attachment.type})` : attachment.name)),
-    current: { path: ctx.from, description: describeCurrent(ctx, root) },
-    options,
-    askBelongsHere: !atRoot,
-  })
+  const attachments = input.attachments?.map(attachment => (attachment.type ? `${attachment.name} (${attachment.type})` : attachment.name))
+  const current = { path: ctx.from, description: describeCurrent(ctx, root) }
+  // The turn start waits for this answer. The decision model needs only the decision layer on (no toggle).
+  const decide = await openDecisionPoint({ ...deps, record: 'auto_working_directory', maxDeadlineMs: FOREGROUND_MAX_DEADLINE_MS, sessionId: input.sessionId })
+  if (!decide) {
+    // Off or unavailable: the connection's small model, if the host offers one. Not in decisions.jsonl.
+    if (!deps.askMiniModel) return stay(ctx, 'model', 'no_answer')
+    const prompt = buildMiniModelPrompt({ message: input.message, attachments, current, options, askBelongsHere: !atRoot })
+    const reply = await askMiniModelWithin(deps.askMiniModel, prompt, deps.miniModelDeadlineMs ?? MINI_MODEL_DEADLINE_MS, deps.log)
+    return judgeMiniModelAnswer(ctx, parseMiniModelAnswer(reply, options), options, named)
+  }
+  const request = buildCwdRouterRequest({ message: input.message, attachments, current, options, askBelongsHere: !atRoot })
+  // No answer from a decision model that opened: stay rather than wait again for the small model
   const result = await decide(request, { candidates: options.length, narrowed: named.length > 1, atRoot })
-  const route = judgeModelAnswer(ctx, result, options, named)
+  const route: CwdRoute = { ...judgeModelAnswer(ctx, result, options, named), via: 'jev' }
   recordDecisionOutcome(result, {
     action: route.action,
     changed: route.action === 'route',

@@ -1408,7 +1408,6 @@ export default function AiSettingsPage() {
       { feature: 'midTurnMessages', label: t("settings.ai.decisions.featureMidTurnMessages"), description: t("settings.ai.decisions.featureMidTurnMessagesDesc"), tooltip: t("settings.ai.decisions.featureMidTurnMessagesTooltip") },
       { feature: 'turnOutcome', label: t("settings.ai.decisions.featureTurnOutcome"), description: t("settings.ai.decisions.featureTurnOutcomeDesc"), tooltip: t("settings.ai.decisions.featureTurnOutcomeTooltip") },
       { feature: 'smartTitles', label: t("settings.ai.decisions.featureSmartTitles"), description: t("settings.ai.decisions.featureSmartTitlesDesc"), tooltip: t("settings.ai.decisions.featureSmartTitlesTooltip") },
-      { feature: 'autoWorkingDirectory', label: t("settings.ai.decisions.featureAutoWorkingDirectory"), description: t("settings.ai.decisions.featureAutoWorkingDirectoryDesc"), tooltip: t("settings.ai.decisions.featureAutoWorkingDirectoryTooltip") },
     ] },
     { id: 'permissions', title: t("settings.ai.decisions.groupPermissions"), toggles: [
       { feature: 'guardedMode', label: t("settings.ai.decisions.featureGuardedMode"), description: t("settings.ai.decisions.featureGuardedModeDesc"), tooltip: t("settings.ai.decisions.featureGuardedModeTooltip") },

@@ -4,10 +4,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSession as createStoredSession, listSessions, loadSession, saveSession } from '../../../shared/src/sessions/storage.ts'
 import * as cwdRouter from '../decisions/cwd-router.ts'
+import * as decisionPoint from '../decisions/decision-point.ts'
 import { SessionManager, createManagedSession } from './SessionManager.ts'
 
-// Auto working directory (toggle `autoWorkingDirectory`): the first message of a session still in
-// the workspace's default folder may move it to the project it is about, before the agent exists.
+// Auto working directory (workspace switch `autoWorkingDirectory`): the first message of a session
+// still in the workspace's default folder may move it to the project it is about, before the agent
+// exists. It needs no decision model: without one the connection's small model picks.
 describe('auto working directory', () => {
   let wsRoot: string
   let projectRoot: string
@@ -16,8 +18,20 @@ describe('auto working directory', () => {
   let agentCreatedIn: Array<{ workingDirectory?: string; sdkCwd?: string }>
   let configBefore: string
 
-  function writeConfig(folders?: string[]) {
-    writeFileSync(join(wsRoot, 'config.json'), JSON.stringify({ id: 'ws-test', name: 'Test', slug: 'test', defaults: { workingDirectory: projectRoot }, ...(folders ? { autoWorkingDirectoryFolders: folders } : {}) }))
+  function writeConfig(folders?: string[], { enabled = true }: { enabled?: boolean } = {}) {
+    writeFileSync(join(wsRoot, 'config.json'), JSON.stringify({
+      id: 'ws-test', name: 'Test', slug: 'test', defaults: { workingDirectory: projectRoot },
+      ...(enabled ? { autoWorkingDirectory: true } : {}),
+      ...(folders ? { autoWorkingDirectoryFolders: folders } : {}),
+    }))
+  }
+
+  /** A throwaway agent for the small model, answering `reply`. */
+  function smallModel(reply: () => Promise<string | null>, auth: { authInjected: boolean; authWarning?: string } = { authInjected: true }) {
+    const agent = { postInit: mock(async () => auth), runMiniCompletion: mock((_prompt: string) => reply()), destroy: mock(() => {}) }
+    const create = mock((_workspace: unknown, _options: { id: string; llmConnection?: string }) => agent)
+    ;(sm as any).createUtilityAgent = create
+    return { agent, create }
   }
 
   function write(rel: string, content: string) {
@@ -38,7 +52,9 @@ describe('auto working directory', () => {
     sm = new SessionManager()
     events = []
     agentCreatedIn = []
-    ;(sm as any).decisionFeatureActive = (feature: string) => feature === 'autoWorkingDirectory'
+    // No decision model anywhere: the feature must run without one
+    ;(sm as any).decisionFeatureActive = () => false
+    spyOn(decisionPoint, 'openDecisionPoint').mockResolvedValue(null)
     ;(sm as any).startPreTurnDecisions = () => null
     // Title generation runs in the background and would write after the test's cleanup
     ;(sm as any).generateTitleUnlessSmallTalk = async () => {}
@@ -170,9 +186,9 @@ describe('auto working directory', () => {
     expect(router.mock.calls[0]![0].folders).toEqual(['projects/acme: storefront API', 'projects/garden: planting and watering'])
   })
 
-  it('does not ask when the toggle is off', async () => {
-    ;(sm as any).decisionFeatureActive = () => false
-    const managed = await session('toggle-off')
+  it('does not ask while the workspace switch is off', async () => {
+    writeConfig(['projects/acme: storefront API', 'projects/garden: planting and watering'], { enabled: false })
+    const managed = await session('switch-off')
     const router = spyOn(cwdRouter, 'routeWorkingDirectory')
     await sm.sendMessage(managed.id, 'plan the garden for spring')
     expect(router).not.toHaveBeenCalled()
@@ -197,6 +213,52 @@ describe('auto working directory', () => {
     await sm.sendMessage(managed.id, 'plan the garden for spring')
     expect(managed.workingDirectory).toBe(acme)
     expect(managed.workingDirectoryOrigin).toBe('user')
+  })
+
+  it('asks the small model of the session\'s connection when no folder is named', async () => {
+    const managed = await session('small-model', { llmConnection: 'conn-a' })
+    const { agent, create } = smallModel(async () => 'projects/acme')
+    await sm.sendMessage(managed.id, 'check the storefront prices')
+    const acme = join(projectRoot, 'projects/acme')
+    expect(create.mock.calls[0]![1]).toMatchObject({ id: 'small-model-auto-working-directory', llmConnection: 'conn-a' })
+    expect(agent.runMiniCompletion.mock.calls[0]![0]).toContain('- projects/acme: storefront API')
+    expect(agent.destroy).toHaveBeenCalledTimes(1)
+    expect(managed.workingDirectory).toBe(acme)
+    expect(agentCreatedIn).toEqual([{ workingDirectory: acme, sdkCwd: acme }])
+    expect(managed.messages[1]).toMatchObject({ role: 'info', content: 'Auto working directory: (root) → projects/acme (model)' })
+  })
+
+  it('stays when the connection has no credentials for the small model', async () => {
+    const managed = await session('no-credentials')
+    const { agent } = smallModel(async () => 'projects/acme', { authInjected: false, authWarning: 'no key' })
+    await sm.sendMessage(managed.id, 'check the storefront prices')
+    expect(agent.runMiniCompletion).not.toHaveBeenCalled()
+    expect(agent.destroy).toHaveBeenCalledTimes(1)
+    expect(managed.workingDirectory).toBe(projectRoot)
+  })
+
+  it('keeps a folder the user picked while the small model ran', async () => {
+    const managed = await session('picked-during-small-model')
+    const garden = join(projectRoot, 'projects/garden')
+    smallModel(async () => {
+      sm.updateWorkingDirectory(managed.id, garden)
+      return 'projects/acme'
+    })
+    await sm.sendMessage(managed.id, 'check the storefront prices')
+    expect(managed.workingDirectory).toBe(garden)
+    expect(managed.workingDirectoryOrigin).toBe('user')
+  })
+
+  it('destroys the small model\'s agent as soon as the router stops waiting', async () => {
+    const managed = await session('abandoned')
+    const { agent } = smallModel(() => new Promise<string | null>(() => {}))
+    const controller = new AbortController()
+    void (sm as any).askAutoWorkingDirectoryModel(managed, 'prompt', controller.signal)
+    await new Promise(resolve => setTimeout(resolve, 0))
+    expect(agent.runMiniCompletion).toHaveBeenCalledTimes(1)
+    expect(agent.destroy).not.toHaveBeenCalled()
+    controller.abort()
+    expect(agent.destroy).toHaveBeenCalledTimes(1)
   })
 
   it('never moves a session that already has an agent', async () => {

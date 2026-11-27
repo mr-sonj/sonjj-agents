@@ -819,7 +819,7 @@ interface ManagedSession {
   // Ensures SDK can find session transcripts regardless of workingDirectory changes.
   sdkCwd?: string
   // Where workingDirectory came from: the first message may replace it only when 'default' or
-  // 'inherited' (toggle `autoWorkingDirectory`). Absent in older sessions: treated as 'explicit'.
+  // 'inherited' (workspace switch `autoWorkingDirectory`). Absent in older sessions: treated as 'explicit'.
   workingDirectoryOrigin?: WorkingDirectoryOrigin
   // Shared viewer URL (if shared via viewer)
   sharedUrl?: string
@@ -6397,7 +6397,7 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
-   * Whether this message may pick the session's folder (toggle `autoWorkingDirectory`): the first
+   * Whether this message may pick the session's folder (workspace switch `autoWorkingDirectory`): the first
    * user message of an interactive session with no agent yet, still in the workspace's default
    * folder (or one remembered from an earlier session), and not a slash command.
    */
@@ -6407,7 +6407,6 @@ export class SessionManager implements ISessionManager {
     options: SendMessageOptions | undefined,
     turn: { activationResend: boolean; authRetry?: boolean },
   ): boolean {
-    if (!this.decisionFeatureActive('autoWorkingDirectory')) return false
     if (managed.agent || managed.sdkSessionId || !managed.workingDirectory) return false
     if (turn.activationResend || turn.authRetry || options?.hidden || managed.hidden || managed.systemPromptPreset === 'mini') return false
     if (managed.taskSlug || managed.taskRunId || managed.taskNodeId || managed.taskDraft || managed.unattended
@@ -6415,7 +6414,9 @@ export class SessionManager implements ISessionManager {
     const origin = managed.workingDirectoryOrigin ?? 'explicit'
     if (origin !== 'default' && origin !== 'inherited') return false
     if (message.trim().startsWith('/')) return false
-    return managed.messages.filter(m => m.role === 'user').length === 1
+    if (managed.messages.filter(m => m.role === 'user').length !== 1) return false
+    // Read last: only a session's first message gets here. Works with or without the decision model.
+    return loadWorkspaceConfig(managed.workspace.rootPath)?.autoWorkingDirectory === true
   }
 
   /** Ask the cwd router and apply its route. Never throws: on any failure the session keeps its folder. */
@@ -6429,16 +6430,52 @@ export class SessionManager implements ISessionManager {
       if (!root || !from || !folders?.length) return
       const route = await routeWorkingDirectory(
         { root, workingDirectory: from, message, attachments, sessionId: managed.id, folders },
-        { log: line => sessionLog.info(line) },
+        {
+          log: line => sessionLog.info(line),
+          // Without the decision model: the small model of the connection this session will use
+          askMiniModel: (prompt, signal) => this.askAutoWorkingDirectoryModel(managed, prompt, signal),
+        },
       )
       if (!route) return
-      sessionLog.info(`[auto-working-directory] Session ${managed.id}: ${route.action} (${route.reason}${route.rule ? `, ${route.rule}` : ''}) from ${route.from}${route.to ? ` to ${route.to}` : ''}`)
+      sessionLog.info(`[auto-working-directory] Session ${managed.id}: ${route.action} (${route.reason}${route.via ? ` via ${route.via}` : ''}${route.rule ? `, ${route.rule}` : ''}) from ${route.from}${route.to ? ` to ${route.to}` : ''}`)
       if (route.action !== 'route' || !route.target) return
       // Deleted, or the user picked a folder while the router ran: nothing to move, or theirs stands
       if (this.sessions.get(managed.id) !== managed || managed.workingDirectory !== from || managed.workingDirectoryOrigin === 'user') return
       this.applyAutoWorkingDirectory(managed, route.target, route)
     } catch (error) {
       sessionLog.warn(`[auto-working-directory] Session ${managed.id}: router failed, keeping ${from}:`, error)
+    }
+  }
+
+  /**
+   * The router's small model: one completion on a throwaway agent of the connection the session
+   * will use (as for handoff summaries), destroyed when the reply comes or the router stops
+   * waiting. `null` without credentials: never the CLI's own login.
+   */
+  private async askAutoWorkingDirectoryModel(managed: ManagedSession, prompt: string, signal: AbortSignal): Promise<string | null> {
+    const agent = this.createUtilityAgent(managed.workspace, {
+      id: `${managed.id}-auto-working-directory`,
+      llmConnection: managed.llmConnection,
+      model: managed.model,
+    })
+    let destroyed = false
+    const destroy = () => {
+      if (destroyed) return
+      destroyed = true
+      agent.destroy()
+    }
+    signal.addEventListener('abort', destroy, { once: true })
+    try {
+      const { authInjected, authWarning } = await agent.postInit()
+      if (!authInjected) {
+        sessionLog.warn(`[auto-working-directory] Session ${managed.id}: no small model: ${authWarning ?? 'no credentials'}`)
+        return null
+      }
+      if (signal.aborted) return null
+      return await agent.runMiniCompletion(prompt)
+    } finally {
+      signal.removeEventListener('abort', destroy)
+      destroy()
     }
   }
 

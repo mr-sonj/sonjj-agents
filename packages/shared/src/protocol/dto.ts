@@ -832,6 +832,8 @@ export interface WorkspaceSettings {
   defaultLlmConnection?: string
   enabledSourceSlugs?: string[]
   chatStarters?: Array<{ label: string; prompt: string }>
+  /** Auto working directory switch: a session's first message may pick its project folder */
+  autoWorkingDirectory?: boolean
   /** Auto working directory: the folders a session's first message may move to, one `path: note` line each */
   autoWorkingDirectoryFolders?: string[]
   /** Lines of that list that name no usable folder (read-only, checked by the server) */

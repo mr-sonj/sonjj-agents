@@ -48,8 +48,8 @@ export interface DecisionPointDeps {
 }
 
 export interface DecisionPointOptions extends DecisionPointDeps {
-  /** Settings toggle that gates this point. */
-  feature: DecisionLayerFeature
+  /** Settings toggle that gates this point; without one, the Settings switch alone does. */
+  feature?: DecisionLayerFeature
   /** Tag written to decisions.jsonl. */
   record: DecisionFeature
   sessionId?: string

@@ -7,8 +7,9 @@ import { RPC_CHANNELS } from '@craft-agent/shared/protocol'
 import type { HandlerFn, RpcServer } from '../../transport/types'
 import { registerSettingsHandlers } from './settings'
 
-// The auto working directory folder list (`autoWorkingDirectoryFolders`) through the workspace
-// settings RPC: saved as typed, read back with the lines that name no usable folder.
+// The auto working directory switch (`autoWorkingDirectory`) and folder list
+// (`autoWorkingDirectoryFolders`) through the workspace settings RPC: the list saved as typed,
+// read back with the lines that name no usable folder.
 describe('workspace settings: auto working directory folders', () => {
   let wsRoot: string
   let projectRoot: string
@@ -16,7 +17,7 @@ describe('workspace settings: auto working directory folders', () => {
   const ctx = {} as never
 
   const config = () => JSON.parse(readFileSync(join(wsRoot, 'config.json'), 'utf-8'))
-  const update = (value: unknown) => handlers.get(RPC_CHANNELS.workspace.SETTINGS_UPDATE)!(ctx, 'ws', 'autoWorkingDirectoryFolders', value)
+  const update = (value: unknown, key = 'autoWorkingDirectoryFolders') => handlers.get(RPC_CHANNELS.workspace.SETTINGS_UPDATE)!(ctx, 'ws', key, value)
   const get = () => handlers.get(RPC_CHANNELS.workspace.SETTINGS_GET)!(ctx, 'ws') as Promise<Record<string, unknown>>
 
   beforeEach(() => {
@@ -63,5 +64,23 @@ describe('workspace settings: auto working directory folders', () => {
   it('rejects a value that is not lines', async () => {
     await expect(update({ folders: 1 })).rejects.toThrow()
     expect('autoWorkingDirectoryFolders' in config()).toBe(false)
+  })
+
+  it('saves the switch as true and removes it when turned off', async () => {
+    expect((await get()).autoWorkingDirectory).toBe(false)
+    await update(true, 'autoWorkingDirectory')
+    expect(config().autoWorkingDirectory).toBe(true)
+    expect((await get()).autoWorkingDirectory).toBe(true)
+    await update(false, 'autoWorkingDirectory')
+    expect('autoWorkingDirectory' in config()).toBe(false)
+    expect((await get()).autoWorkingDirectory).toBe(false)
+  })
+
+  it('rejects a switch value that is not a boolean, and reads only true as on', async () => {
+    await expect(update('true', 'autoWorkingDirectory')).rejects.toThrow()
+    expect('autoWorkingDirectory' in config()).toBe(false)
+    // Written by hand (or by an agent) as a string: not on
+    writeFileSync(join(wsRoot, 'config.json'), JSON.stringify({ ...config(), autoWorkingDirectory: 'true' }))
+    expect((await get()).autoWorkingDirectory).toBe(false)
   })
 })

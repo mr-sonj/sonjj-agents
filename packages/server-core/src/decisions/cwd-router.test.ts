@@ -14,6 +14,7 @@ import {
   MAX_CANDIDATES,
   MESSAGE_MAX_CHARS,
   buildCwdRouterRequest,
+  buildMiniModelPrompt,
   classifyPaths,
   collectMessagePaths,
   describeContextFile,
@@ -22,6 +23,7 @@ import {
   findNamedCandidates,
   normalizeFolderListLines,
   parseFolderList,
+  parseMiniModelAnswer,
   resolveWorkingDirectoryOrigin,
   routeWorkingDirectory,
   type CwdRouterDeps,
@@ -33,7 +35,7 @@ type Answers = Record<string, unknown>
 function jev(answer: Answers | ((body: { state: Record<string, unknown>; questions: Record<string, { criteria?: Record<string, unknown> }> }) => Answers)) {
   const bodies: Array<{ state: Record<string, unknown>; questions: Record<string, { type: string; criteria?: Record<string, unknown> }> }> = []
   const resolveClient = async (): Promise<DecisionClientResolution> => {
-    const settings = normalizeDecisionLayerSettings({ enabled: true, provider: 'openrouter', features: { autoWorkingDirectory: true } })
+    const settings = normalizeDecisionLayerSettings({ enabled: true, provider: 'openrouter' })
     const endpoint = resolveDecisionEndpoint(settings)
     const fetchImpl = (async (_url: string, init: { body: string }) => {
       const body = JSON.parse(init.body)
@@ -326,6 +328,105 @@ describe('cwd router', () => {
 
     it('does not run outside the root', async () => {
       expect(await routeWorkingDirectory({ root, workingDirectory: outside, message: 'x', folders: FOLDERS }, deps())).toBeNull()
+    })
+  })
+
+  describe('without the decision model', () => {
+    /** A small model replying `reply` (or what `reply(prompt)` returns), keeping each prompt. */
+    function mini(reply: string | null | ((prompt: string) => string | null)) {
+      const prompts: string[] = []
+      const askMiniModel = async (prompt: string) => {
+        prompts.push(prompt)
+        return typeof reply === 'function' ? reply(prompt) : reply
+      }
+      return { askMiniModel, prompts }
+    }
+    const withMini = (reply: Parameters<typeof mini>[0]) => ({ resolveClient: off, askMiniModel: mini(reply).askMiniModel })
+
+    it('routes from the root on the small model\'s pick', async () => {
+      const model = mini('projects/garden')
+      expect(await route('when should we plant tomatoes?', '', { resolveClient: off, askMiniModel: model.askMiniModel })).toMatchObject({ action: 'route', reason: 'model', via: 'mini_model', target: at('projects/garden'), from: '(root)', to: 'projects/garden' })
+      expect(model.prompts).toHaveLength(1)
+    })
+
+    it('accepts a pick wrapped in quotes, backticks or a final period, nothing longer', async () => {
+      expect(await route('when should we plant tomatoes?', '', withMini('`projects/garden`.'))).toMatchObject({ action: 'route', to: 'projects/garden' })
+      expect(await route('when should we plant tomatoes?', '', withMini(' "Projects/Garden" '))).toMatchObject({ action: 'route', to: 'projects/garden' })
+      expect(await route('when should we plant tomatoes?', '', withMini('I would pick projects/garden'))).toMatchObject({ action: 'stay', rule: 'no_answer', via: 'mini_model' })
+      const options = parseFolderList(FOLDERS, root, { describe: false }).candidates
+      expect(parseMiniModelAnswer('STAY', options)).toBe('stay')
+      expect(parseMiniModelAnswer('content/drafts\n', options)).toBe('content/drafts')
+      expect(parseMiniModelAnswer('projects/notes', options)).toBeNull()
+      expect(parseMiniModelAnswer('', options)).toBeNull()
+    })
+
+    it('stays on stay, unclear, an unknown key, no reply or an error', async () => {
+      expect(await route('hi', '', withMini('stay'))).toMatchObject({ action: 'stay', rule: 'stay_or_unclear', via: 'mini_model' })
+      expect(await route('hi', '', withMini('unclear'))).toMatchObject({ action: 'stay', rule: 'stay_or_unclear' })
+      expect(await route('hi', '', withMini('projects/notes'))).toMatchObject({ action: 'stay', rule: 'no_answer' })
+      expect(await route('hi', '', withMini(null))).toMatchObject({ action: 'stay', rule: 'no_answer' })
+      expect(await route('hi', '', { resolveClient: off, askMiniModel: async () => { throw new Error('boom') } })).toMatchObject({ action: 'stay', rule: 'no_answer' })
+      expect(logs.some(line => line.includes('small model failed: boom'))).toBe(true)
+    })
+
+    it('away from the root, moves only to a folder the message names', async () => {
+      expect(await route('check the garden watering', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'route', reason: 'name', via: 'mini_model', from: 'projects/acme', to: 'projects/garden' })
+      expect(await route('check the watering', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'stay', rule: 'no_hard_signal', to: 'projects/garden' })
+      expect(await route('continue', 'projects/acme', withMini('stay'))).toMatchObject({ action: 'stay', rule: 'stay_or_unclear' })
+    })
+
+    it('never moves within a branch', async () => {
+      expect(await route('move the content draft', 'content/drafts', withMini('content'))).toMatchObject({ action: 'stay', rule: 'same_branch' })
+    })
+
+    it('stays when the small model does not answer in time, and aborts it', async () => {
+      let signal: AbortSignal | undefined
+      const hang = (_prompt: string, s: AbortSignal) => { signal = s; return new Promise<string | null>(() => {}) }
+      expect(await route('when should we plant tomatoes?', '', { resolveClient: off, askMiniModel: hang, miniModelDeadlineMs: 20 })).toMatchObject({ action: 'stay', rule: 'no_answer' })
+      expect(signal?.aborted).toBe(true)
+      expect(logs.some(line => line.includes('no answer within 20 ms'))).toBe(true)
+    })
+
+    it('does not ask the small model when the decision model opened but gave no answer', async () => {
+      const model = mini('projects/garden')
+      const failing = async (): Promise<DecisionClientResolution> => {
+        const resolution = await jev({}).resolveClient()
+        if (!resolution.ok) return resolution
+        const client = new SystemOneClient({ baseUrl: resolution.value.endpoint.baseUrl, apiKey: 'k', model: resolution.value.endpoint.model, fetch: (async () => new Response('down', { status: 500 })) as unknown as typeof fetch })
+        return { ok: true, value: { ...resolution.value, client } }
+      }
+      expect(await route('when should we plant tomatoes?', '', { resolveClient: failing, askMiniModel: model.askMiniModel })).toMatchObject({ action: 'stay', rule: 'no_answer', via: 'jev' })
+      expect(model.prompts).toHaveLength(0)
+    })
+
+    it('stays without a small model', async () => {
+      expect(await route('when should we plant tomatoes?', '', { resolveClient: off })).toMatchObject({ action: 'stay', rule: 'no_answer' })
+    })
+
+    it('sends relative paths only, the notes, the current folder and the reserved keys', async () => {
+      const model = mini('stay')
+      await route('check the watering', 'projects/acme/tasks/rework', { resolveClient: off, askMiniModel: model.askMiniModel }, [{ name: 'shot.png', type: 'image' }])
+      const [prompt] = model.prompts
+      expect(prompt).toContain('- projects/garden: planting calendar and watering (Garden plans — Planting calendar, watering and seed orders.)')
+      expect(prompt).toContain('Current folder: projects/acme/tasks/rework — Rework pricing — Move the pricing endpoint to v2.')
+      expect(prompt).toContain('Attachments: shot.png (image)')
+      expect(prompt).toContain('counts as stay')
+      expect(prompt).toContain('- unclear: Cannot tell')
+      expect(prompt).toContain('<message>\ncheck the watering\n</message>')
+      expect(prompt).not.toContain(root)
+      const fromRoot = buildMiniModelPrompt({ message: 'x', current: { path: '(root)', description: '' }, options: [], askBelongsHere: false })
+      expect(fromRoot).toContain('Current folder: (root)')
+      expect(fromRoot).not.toContain('counts as stay')
+    })
+
+    it('records nothing in the decision log', async () => {
+      await route('when should we plant tomatoes?', '', withMini('projects/garden'))
+      expect(outcomes).toEqual([])
+    })
+
+    it('ignores a decision toggle stored by an earlier version', () => {
+      const settings = normalizeDecisionLayerSettings({ enabled: true, features: { autoWorkingDirectory: true } as never })
+      expect(Object.keys(settings.features)).not.toContain('autoWorkingDirectory')
     })
   })
 
