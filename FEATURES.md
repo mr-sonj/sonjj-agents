@@ -9,6 +9,7 @@ Each feature lives on its own branch, based on `main` (a clean copy of upstream)
 | `feature/custom-skills-sources` | Custom skills and sources folders per workspace |
 | `feature/custom-tweaks` | New sessions remember the last working directory |
 | `feature/agents-md-discovery` | `AGENTS.md` from working directories outside the workspace |
+| `feature/auto-working-directory` | A session's first message picks its project folder from a list you keep |
 | `fix/gemini-vertex-tool-schemas` | Tool schemas that Gemini and Vertex AI accept |
 | `fix/custom-endpoint-web-search` | Web search that works on custom OpenAI/Anthropic-compatible endpoints |
 | `fix/openai-sse-finish-reason` | Tool calls through proxies that end the stream on the last tool chunk |
@@ -49,6 +50,25 @@ also lists that folder's `AGENTS.md` / `CLAUDE.md`, so the agent follows the pro
 Discovery depth is limited so large trees stay fast.
 
 Main files: `packages/shared/src/prompts/system.ts`.
+
+## Auto working directory
+
+Branch: `feature/auto-working-directory`
+
+With the decision model on, a new session's first message can move the session to the project folder it
+is about before the agent starts, so the project's `AGENTS.md` and the shell's folder are right from the
+first turn. Turn it on in **Settings → AI** (toggle **Auto working directory**, off by default) and list
+the folders it may pick in **Workspace Settings → Auto working directory**, one `path: when to pick it`
+line each; an edit button lets an agent add new project folders and describe them. With no list nothing
+moves. A path or a listed folder's name in the message counts first; otherwise the decision model picks,
+and the session stays where it is when unsure. It only acts while the session is still in the
+workspace's working directory (or one remembered from an earlier session), never after you pick a
+folder, and never for task, automation, branch or hidden sessions. A move is never remembered as the
+folder for later sessions.
+
+Main files: `packages/server-core/src/decisions/cwd-router.ts`,
+`packages/server-core/src/sessions/SessionManager.ts`,
+`apps/electron/src/renderer/pages/settings/AutoWorkingDirectoryFolders.tsx`.
 
 ## Gemini and Vertex AI tool schemas
 
