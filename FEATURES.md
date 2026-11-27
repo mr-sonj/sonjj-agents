@@ -55,20 +55,22 @@ Main files: `packages/shared/src/prompts/system.ts`.
 
 Branch: `feature/auto-working-directory`
 
-With the decision model on, a new session's first message can move the session to the project folder it
-is about before the agent starts, so the project's `AGENTS.md` and the shell's folder are right from the
-first turn. Turn it on in **Settings → AI** (toggle **Auto working directory**, off by default) and list
-the folders it may pick in **Workspace Settings → Auto working directory**, one `path: when to pick it`
-line each; an edit button lets an agent add new project folders and describe them. With no list nothing
-moves. A path or a listed folder's name in the message counts first; otherwise the decision model picks,
-and the session stays where it is when unsure. It only acts while the session is still in the
-workspace's working directory (or one remembered from an earlier session), never after you pick a
-folder, and never for task, automation, branch or hidden sessions. A move is never remembered as the
-folder for later sessions.
+A new session's first message can move the session to the project folder it is about before the agent
+starts, so the project's `AGENTS.md` and the shell's folder are right from the first turn. Turn it on per
+workspace in **Workspace Settings → Auto working directory** (off by default) and list the folders it may
+pick there, one `path: when to pick it` line each. An edit button lets an agent add new project folders and
+describe them, and an agent in any chat can do the same (it reads the bundled guide
+`docs/auto-working-directory.md`). With no list nothing moves. A path or a listed folder's name in the
+message counts first; otherwise the decision model picks when it is on, else the small model of the
+session's connection (one short call, at most 8 seconds), and the session stays where it is when unsure. It
+only acts while the session is still in the workspace's working directory (or one remembered from an earlier
+session), never after you pick a folder, and never for task, automation, branch or hidden sessions. A move
+is never remembered as the folder for later sessions.
 
 Main files: `packages/server-core/src/decisions/cwd-router.ts`,
 `packages/server-core/src/sessions/SessionManager.ts`,
-`apps/electron/src/renderer/pages/settings/AutoWorkingDirectoryFolders.tsx`.
+`apps/electron/src/renderer/pages/settings/AutoWorkingDirectoryFolders.tsx`,
+`apps/electron/resources/docs/auto-working-directory.md`.
 
 ## Gemini and Vertex AI tool schemas
 
