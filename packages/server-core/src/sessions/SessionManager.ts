@@ -118,6 +118,8 @@ import { buildGuardedModeCheck } from '../decisions/guarded-mode'
 import { buildSubagentModelPicker } from '../decisions/subagent-models'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
+import { describeRoute, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
+import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
 import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
 import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labels/crud'
@@ -816,6 +818,9 @@ interface ManagedSession {
   // SDK cwd for session storage - set once at creation, never changes.
   // Ensures SDK can find session transcripts regardless of workingDirectory changes.
   sdkCwd?: string
+  // Where workingDirectory came from: the first message may replace it only when 'default' or
+  // 'inherited' (toggle `autoWorkingDirectory`). Absent in older sessions: treated as 'explicit'.
+  workingDirectoryOrigin?: WorkingDirectoryOrigin
   // Shared viewer URL (if shared via viewer)
   sharedUrl?: string
   // Shared session ID in viewer (for revoke)
@@ -3470,6 +3475,15 @@ export class SessionManager implements ISessionManager {
       }
     }
 
+    // Where the folder came from. Compared with the configured project folder rather than
+    // `userDefaultWorkingDir`, so a folder remembered from an earlier session counts as inherited.
+    const workingDirectoryOrigin = resolveWorkingDirectoryOrigin({
+      requested: options?.workingDirectory,
+      resolved: resolvedWorkingDir,
+      configuredDefault: wsConfig?.defaults?.workingDirectory || undefined,
+      boundElsewhere: !!resolvedProjectId || !!options?.parentSessionId || !!options?.branchFromSessionId,
+    })
+
     // Validate branch request up-front so branch metadata is only set for valid branches.
     // This prevents creating sessions that claim to be branched but don't have copied history.
     // A branch keeps its parent's coding mode: an SDK fork carries the parent's pinned system prompt.
@@ -3667,6 +3681,7 @@ export class SessionManager implements ISessionManager {
       name: options?.name,
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
+      workingDirectoryOrigin,
       hidden: options?.hidden,
       sessionStatus: options?.sessionStatus,
       // Automations, spawn_session and task flows hand in labels unvalidated: store them canonical
@@ -6347,6 +6362,7 @@ export class SessionManager implements ISessionManager {
       }
 
       managed.workingDirectory = path
+      managed.workingDirectoryOrigin = 'user'
 
       // Invalidate filesystem caches that depend on working directory
       invalidateContextFileCache(path)
@@ -6378,6 +6394,69 @@ export class SessionManager implements ISessionManager {
       // Notify renderer of the working directory change
       this.sendEvent({ type: 'working_directory_changed', sessionId, workingDirectory: path }, managed.workspace.id)
     }
+  }
+
+  /**
+   * Whether this message may pick the session's folder (toggle `autoWorkingDirectory`): the first
+   * user message of an interactive session with no agent yet, still in the workspace's default
+   * folder (or one remembered from an earlier session), and not a slash command.
+   */
+  private shouldAutoRouteWorkingDirectory(
+    managed: ManagedSession,
+    message: string,
+    options: SendMessageOptions | undefined,
+    turn: { activationResend: boolean; authRetry?: boolean },
+  ): boolean {
+    if (!this.decisionFeatureActive('autoWorkingDirectory')) return false
+    if (managed.agent || managed.sdkSessionId || !managed.workingDirectory) return false
+    if (turn.activationResend || turn.authRetry || options?.hidden || managed.hidden || managed.systemPromptPreset === 'mini') return false
+    if (managed.taskSlug || managed.taskRunId || managed.taskNodeId || managed.taskDraft || managed.unattended
+      || managed.parentSessionId || managed.triggeredBy || managed.branchFromMessageId) return false
+    const origin = managed.workingDirectoryOrigin ?? 'explicit'
+    if (origin !== 'default' && origin !== 'inherited') return false
+    if (message.trim().startsWith('/')) return false
+    return managed.messages.filter(m => m.role === 'user').length === 1
+  }
+
+  /** Ask the cwd router and apply its route. Never throws: on any failure the session keeps its folder. */
+  private async autoRouteWorkingDirectory(managed: ManagedSession, message: string, attachments?: FileAttachment[]): Promise<void> {
+    const from = managed.workingDirectory
+    try {
+      const root = loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.workingDirectory
+      if (!root || !from) return
+      const route = await routeWorkingDirectory(
+        { root, workingDirectory: from, message, attachments, sessionId: managed.id },
+        { log: line => sessionLog.info(line) },
+      )
+      if (!route) return
+      sessionLog.info(`[auto-working-directory] Session ${managed.id}: ${route.action} (${route.reason}${route.rule ? `, ${route.rule}` : ''}) from ${route.from}${route.to ? ` to ${route.to}` : ''}`)
+      if (route.action !== 'route' || !route.target) return
+      // Deleted, or the user picked a folder while the router ran: nothing to move, or theirs stands
+      if (this.sessions.get(managed.id) !== managed || managed.workingDirectory !== from || managed.workingDirectoryOrigin === 'user') return
+      this.applyAutoWorkingDirectory(managed, route.target, route)
+    } catch (error) {
+      sessionLog.warn(`[auto-working-directory] Session ${managed.id}: router failed, keeping ${from}:`, error)
+    }
+  }
+
+  /**
+   * Move a session that has no agent yet to the folder the router picked: as if the user had
+   * picked it before the first message (sdkCwd follows, caches are dropped, the folder chip
+   * updates), except that it is never remembered as the folder for later sessions.
+   */
+  private applyAutoWorkingDirectory(managed: ManagedSession, path: string, route: CwdRoute): void {
+    if (managed.agent || managed.sdkSessionId) return
+    managed.workingDirectory = path
+    managed.sdkCwd = path
+    managed.workingDirectoryOrigin = 'auto'
+    invalidateContextFileCache(path)
+    invalidateSkillsCache()
+    const notice: Message = { id: generateMessageId(), role: 'info', content: describeRoute(route), timestamp: this.monotonic() }
+    managed.messages.push(notice)
+    this.persistSession(managed)
+    sessionLog.info(`[auto-working-directory] Session ${managed.id}: working directory and sdkCwd now ${path}`)
+    this.sendEvent({ type: 'working_directory_changed', sessionId: managed.id, workingDirectory: path }, managed.workspace.id)
+    this.sendEvent({ type: 'info', sessionId: managed.id, message: notice.content, level: 'info', timestamp: notice.timestamp }, managed.workspace.id)
   }
 
   /**
@@ -7184,6 +7263,13 @@ export class SessionManager implements ISessionManager {
     // Acking only here means a caller resolved by the ack never finds the session idle.
     endAdmission()
     onAck?.(userMessage.id, 'started')
+
+    // Auto working directory: the first message may move a session still in the workspace's default
+    // folder to the project it is about, before anything below reads the folder (skill sources,
+    // suggestions, the agent's system prompt and shell).
+    if (this.shouldAutoRouteWorkingDirectory(managed, message, options, { activationResend, authRetry: _isAuthRetry })) {
+      await this.autoRouteWorkingDirectory(managed, message, attachments)
+    }
 
     // Pre-enable sources required by invoked skills (Issue #249)
     // This eliminates the two-turn penalty where the agent discovers missing sources at runtime.

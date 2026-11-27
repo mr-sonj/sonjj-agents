@@ -55,6 +55,8 @@ export interface DecisionLayerFeatureToggles {
   suggestions: boolean;
   /** Run a Claude subagent on a cheaper model when its task does not need the session's (never above it). */
   subagentModels: boolean;
+  /** Pick the project folder from a session's first message when the user has not picked one. */
+  autoWorkingDirectory: boolean;
 }
 
 export type DecisionLayerFeature = keyof DecisionLayerFeatureToggles;
@@ -74,6 +76,7 @@ export const DECISION_LAYER_FEATURES: readonly DecisionLayerFeature[] = [
   'largeResults',
   'suggestions',
   'subagentModels',
+  'autoWorkingDirectory',
 ] as const;
 
 export interface DecisionLayerSettings {
@@ -122,7 +125,7 @@ export const DEFAULT_DECISION_LAYER_SETTINGS: DecisionLayerSettings = {
   deadlineMs: DECISION_DEFAULT_DEADLINE_MS,
   // The first three only act when invoked (agent tool call, unparsed verdict, a semantic rule
   // exists); the harness features change what the app does on their own, so they start off.
-  features: { decideTool: true, taskVerdicts: true, semanticLabels: true, turnOutcome: false, guardedMode: false, riskBadges: false, automationConditions: false, taskRepairs: false, smartTitles: false, adaptiveThinking: false, midTurnMessages: false, largeResults: false, suggestions: false, subagentModels: false },
+  features: { decideTool: true, taskVerdicts: true, semanticLabels: true, turnOutcome: false, guardedMode: false, riskBadges: false, automationConditions: false, taskRepairs: false, smartTitles: false, adaptiveThinking: false, midTurnMessages: false, largeResults: false, suggestions: false, subagentModels: false, autoWorkingDirectory: false },
 };
 
 function cleanString(value: unknown): string | undefined {
