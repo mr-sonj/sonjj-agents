@@ -79,9 +79,13 @@ export function AutoWorkingDirectoryFolders({ workspaceId }: { workspaceId: stri
     let cancelled = false
     const refresh = () => {
       window.electronAPI.getDecisionLayerStatus().then((status) => {
+        // As the server resolves it: a chosen connection must still be a usable gateway connection
+        // (no fallback to a provider key); otherwise the provider needs a key, unless it is keyless.
         const { settings } = status
         const preset = status.presets.find(p => p.id === settings.provider)
-        const hasKey = !!settings.connectionSlug || status.providersWithKey.includes(settings.provider) || preset?.requiresKey === false
+        const hasKey = settings.connectionSlug
+          ? status.reusableConnections.some(c => c.slug === settings.connectionSlug)
+          : status.providersWithKey.includes(settings.provider) || preset?.requiresKey === false
         if (!cancelled) setUsesJev(settings.enabled && hasKey)
       }).catch(error => console.error('Failed to load the decision model status:', error))
     }

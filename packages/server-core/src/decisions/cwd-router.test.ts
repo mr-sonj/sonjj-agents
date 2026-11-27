@@ -24,6 +24,7 @@ import {
   normalizeFolderListLines,
   parseFolderList,
   parseMiniModelAnswer,
+  readFolderListLines,
   resolveWorkingDirectoryOrigin,
   routeWorkingDirectory,
   type CwdRouterDeps,
@@ -156,6 +157,15 @@ describe('cwd router', () => {
       const { candidates, issues } = parseFolderList(lines, root, { describe: false })
       expect(candidates).toHaveLength(MAX_CANDIDATES)
       expect(issues).toEqual([{ line: MAX_CANDIDATES + 1, path: `many/p${MAX_CANDIDATES}`, kind: 'too_many' }])
+    })
+
+    it('reads a hand-edited list without throwing: a string, or entries that are not strings', () => {
+      expect(readFolderListLines('projects/acme: x\nprojects/garden: y')).toEqual(['projects/acme: x', 'projects/garden: y'])
+      expect(readFolderListLines(['projects/acme: x', { path: 'projects/garden' }, 3])).toEqual(['projects/acme: x', '{"path":"projects/garden"}', '3'])
+      expect(readFolderListLines({ path: 'projects/garden' })).toEqual(['{"path":"projects/garden"}'])
+      expect(readFolderListLines(undefined)).toEqual([])
+      // The odd entry shows up as a line naming no folder
+      expect(parseFolderList(readFolderListLines(['projects/acme: x', { path: 'projects/garden' }]), root, { describe: false }).issues).toEqual([{ line: 2, path: '{"path"', kind: 'missing' }])
     })
 
     it('is stored as lines without trailing spaces or blank lines', () => {
@@ -371,8 +381,15 @@ describe('cwd router', () => {
 
     it('away from the root, moves only to a folder the message names', async () => {
       expect(await route('check the garden watering', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'route', reason: 'name', via: 'mini_model', from: 'projects/acme', to: 'projects/garden' })
-      expect(await route('check the watering', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'stay', rule: 'no_hard_signal', to: 'projects/garden' })
-      expect(await route('continue', 'projects/acme', withMini('stay'))).toMatchObject({ action: 'stay', rule: 'stay_or_unclear' })
+      expect(await route('compare the garden and content plans', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'route', reason: 'name', to: 'projects/garden' })
+      expect(await route('check the garden watering', 'projects/acme', withMini('stay'))).toMatchObject({ action: 'stay', rule: 'stay_or_unclear' })
+    })
+
+    it('away from the root, does not ask when the message names no folder (no answer could move it)', async () => {
+      const model = mini('projects/garden')
+      expect(await route('check the watering', 'projects/acme', { resolveClient: off, askMiniModel: model.askMiniModel })).toMatchObject({ action: 'stay', rule: 'no_hard_signal' })
+      expect(await route('continue', 'projects/acme', { resolveClient: off, askMiniModel: model.askMiniModel })).toMatchObject({ action: 'stay', rule: 'no_hard_signal' })
+      expect(model.prompts).toHaveLength(0)
     })
 
     it('never moves within a branch', async () => {
@@ -405,14 +422,14 @@ describe('cwd router', () => {
 
     it('sends relative paths only, the notes, the current folder and the reserved keys', async () => {
       const model = mini('stay')
-      await route('check the watering', 'projects/acme/tasks/rework', { resolveClient: off, askMiniModel: model.askMiniModel }, [{ name: 'shot.png', type: 'image' }])
+      await route('check the garden watering', 'projects/acme/tasks/rework', { resolveClient: off, askMiniModel: model.askMiniModel }, [{ name: 'shot.png', type: 'image' }])
       const [prompt] = model.prompts
       expect(prompt).toContain('- projects/garden: planting calendar and watering (Garden plans — Planting calendar, watering and seed orders.)')
       expect(prompt).toContain('Current folder: projects/acme/tasks/rework — Rework pricing — Move the pricing endpoint to v2.')
       expect(prompt).toContain('Attachments: shot.png (image)')
       expect(prompt).toContain('counts as stay')
       expect(prompt).toContain('- unclear: Cannot tell')
-      expect(prompt).toContain('<message>\ncheck the watering\n</message>')
+      expect(prompt).toContain('<message>\ncheck the garden watering\n</message>')
       expect(prompt).not.toContain(root)
       const fromRoot = buildMiniModelPrompt({ message: 'x', current: { path: '(root)', description: '' }, options: [], askBelongsHere: false })
       expect(fromRoot).toContain('Current folder: (root)')

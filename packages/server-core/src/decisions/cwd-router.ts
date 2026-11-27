@@ -208,6 +208,17 @@ export function normalizeFolderListLines(value: unknown): string[] {
   return trimmed
 }
 
+/**
+ * The folder list as found in config.json, never throwing: like `normalizeFolderListLines`, but an
+ * entry that is not a string (a hand edit such as `{ "path": … }`) becomes its JSON text, so it is
+ * reported as a line naming no folder instead of breaking the settings page or the router.
+ */
+export function readFolderListLines(value: unknown): string[] {
+  const asLine = (entry: unknown) => (typeof entry === 'string' ? entry : JSON.stringify(entry) ?? String(entry))
+  if (value === undefined || value === null) return []
+  return normalizeFolderListLines(Array.isArray(value) ? value.map(asLine) : typeof value === 'string' ? value : [asLine(value)])
+}
+
 /** A listed folder's note followed by what its AGENTS.md/CLAUDE.md says, when it has one. */
 function describeListedFolder(path: string, note: string): string {
   const file = contextFileIn(readEntries(path))
@@ -707,6 +718,8 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
   if (!decide) {
     // Off or unavailable: the connection's small model, if the host offers one. Not in decisions.jsonl.
     if (!deps.askMiniModel) return stay(ctx, 'model', 'no_answer')
+    // Away from the root only a folder the message names may win: without one no answer could move it
+    if (!atRoot && named.length === 0) return stay(ctx, 'model', 'no_hard_signal')
     const prompt = buildMiniModelPrompt({ message: input.message, attachments, current, options, askBelongsHere: !atRoot })
     const reply = await askMiniModelWithin(deps.askMiniModel, prompt, deps.miniModelDeadlineMs ?? MINI_MODEL_DEADLINE_MS, deps.log)
     return judgeMiniModelAnswer(ctx, parseMiniModelAnswer(reply, options), options, named)

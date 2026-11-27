@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, mock, spyOn } from 'bun:test'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSession as createStoredSession, listSessions, loadSession, saveSession } from '../../../shared/src/sessions/storage.ts'
@@ -249,16 +249,40 @@ describe('auto working directory', () => {
     expect(managed.workingDirectoryOrigin).toBe('user')
   })
 
-  it('destroys the small model\'s agent as soon as the router stops waiting', async () => {
+  it('destroys the small model\'s agent as soon as the router stops waiting, and again when the call settles', async () => {
     const managed = await session('abandoned')
-    const { agent } = smallModel(() => new Promise<string | null>(() => {}))
+    let finish: (reply: string | null) => void = () => {}
+    const { agent } = smallModel(() => new Promise<string | null>(resolve => { finish = resolve }))
     const controller = new AbortController()
-    void (sm as any).askAutoWorkingDirectoryModel(managed, 'prompt', controller.signal)
+    const asked = (sm as any).askAutoWorkingDirectoryModel(managed, 'prompt', controller.signal)
     await new Promise(resolve => setTimeout(resolve, 0))
     expect(agent.runMiniCompletion).toHaveBeenCalledTimes(1)
     expect(agent.destroy).not.toHaveBeenCalled()
     controller.abort()
     expect(agent.destroy).toHaveBeenCalledTimes(1)
+    // A Pi subprocess spawned after that first destroy is stopped too
+    finish('projects/acme')
+    await asked
+    expect(agent.destroy).toHaveBeenCalledTimes(2)
+  })
+
+  it('removes the folder a Pi utility agent leaves under its session path', async () => {
+    const managed = await session('pi-folder')
+    const folder = join(wsRoot, 'sessions', 'pi-folder-auto-working-directory')
+    smallModel(async () => {
+      mkdirSync(join(folder, '.pi-agent'), { recursive: true })
+      return 'stay'
+    })
+    await sm.sendMessage(managed.id, 'check the storefront prices')
+    expect(existsSync(folder)).toBe(false)
+    expect(existsSync(join(wsRoot, 'sessions', 'pi-folder'))).toBe(true)
+  })
+
+  it('reads a list an agent wrote as one string', async () => {
+    writeFileSync(join(wsRoot, 'config.json'), JSON.stringify({ ...JSON.parse(readFileSync(join(wsRoot, 'config.json'), 'utf-8')), autoWorkingDirectoryFolders: 'projects/acme: storefront API\nprojects/garden: planting' }))
+    const managed = await session('string-list')
+    await sm.sendMessage(managed.id, 'plan the garden for spring')
+    expect(managed.workingDirectory).toBe(join(projectRoot, 'projects/garden'))
   })
 
   it('never moves a session that already has an agent', async () => {

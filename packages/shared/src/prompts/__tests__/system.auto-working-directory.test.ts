@@ -25,6 +25,11 @@ describe('system prompt: auto working directory', () => {
     expect(prompt).toContain('- Workspace settings: `/tmp/workspace/config.json`')
   })
 
+  it('points Coding mode agents at the guide too', () => {
+    const coding = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, undefined, true, undefined, 'coding')
+    expect(coding).toContain(`Workspace settings are in \`/tmp/workspace/config.json\`; read \`${DOC_REFS.autoWorkingDirectory}\``)
+  })
+
   it('ships the guide with both keys and the line format', () => {
     const guide = join(import.meta.dir, '../../../../../apps/electron/resources/docs/auto-working-directory.md')
     expect(existsSync(guide)).toBe(true)

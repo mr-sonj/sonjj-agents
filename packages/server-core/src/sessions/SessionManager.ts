@@ -5,7 +5,7 @@ import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import { createScopedLogger, CONSOLE_LOGGER, type PlatformServices, type Logger } from '@craft-agent/server-core/runtime'
 import { basename, dirname, join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, rmSync } from 'fs'
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { type AgentEvent, type ChatOptions, getPermissionMode, setPermissionMode, setGuardedModeActiveResolver, clampPermissionMode, planExecutionMode, parsePermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
@@ -118,7 +118,7 @@ import { buildGuardedModeCheck } from '../decisions/guarded-mode'
 import { buildSubagentModelPicker } from '../decisions/subagent-models'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
-import { describeRoute, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
+import { describeRoute, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
 import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
 import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
@@ -6425,9 +6425,9 @@ export class SessionManager implements ISessionManager {
     try {
       const config = loadWorkspaceConfig(managed.workspace.rootPath)
       const root = config?.defaults?.workingDirectory
-      // Only the folders the workspace lists can be picked
-      const folders = config?.autoWorkingDirectoryFolders
-      if (!root || !from || !folders?.length) return
+      // Only the folders the workspace lists can be picked (an agent may have written it by hand)
+      const folders = readFolderListLines(config?.autoWorkingDirectoryFolders)
+      if (!root || !from || !folders.length) return
       const route = await routeWorkingDirectory(
         { root, workingDirectory: from, message, attachments, sessionId: managed.id, folders },
         {
@@ -6449,22 +6449,15 @@ export class SessionManager implements ISessionManager {
 
   /**
    * The router's small model: one completion on a throwaway agent of the connection the session
-   * will use (as for handoff summaries), destroyed when the reply comes or the router stops
-   * waiting. `null` without credentials: never the CLI's own login.
+   * will use (as for handoff summaries). It is destroyed as soon as the router stops waiting, and
+   * again once the call settles: a Pi subprocess spawned after the first destroy must not outlive
+   * it. `null` without credentials: never the CLI's own login.
    */
   private async askAutoWorkingDirectoryModel(managed: ManagedSession, prompt: string, signal: AbortSignal): Promise<string | null> {
-    const agent = this.createUtilityAgent(managed.workspace, {
-      id: `${managed.id}-auto-working-directory`,
-      llmConnection: managed.llmConnection,
-      model: managed.model,
-    })
-    let destroyed = false
-    const destroy = () => {
-      if (destroyed) return
-      destroyed = true
-      agent.destroy()
-    }
-    signal.addEventListener('abort', destroy, { once: true })
+    const id = `${managed.id}-auto-working-directory`
+    const agent = this.createUtilityAgent(managed.workspace, { id, llmConnection: managed.llmConnection, model: managed.model })
+    const destroyOnAbort = () => agent.destroy()
+    signal.addEventListener('abort', destroyOnAbort, { once: true })
     try {
       const { authInjected, authWarning } = await agent.postInit()
       if (!authInjected) {
@@ -6474,8 +6467,14 @@ export class SessionManager implements ISessionManager {
       if (signal.aborted) return null
       return await agent.runMiniCompletion(prompt)
     } finally {
-      signal.removeEventListener('abort', destroy)
-      destroy()
+      signal.removeEventListener('abort', destroyOnAbort)
+      agent.destroy()
+      // A Pi utility agent leaves an empty `.pi-agent` folder under its own session path
+      try {
+        rmSync(getSessionStoragePath(managed.workspace.rootPath, id), { recursive: true, force: true })
+      } catch (error) {
+        sessionLog.warn(`[auto-working-directory] Session ${managed.id}: could not remove ${id}:`, error)
+      }
     }
   }
 

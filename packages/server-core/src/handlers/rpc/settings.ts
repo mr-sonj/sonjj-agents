@@ -154,11 +154,7 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       chatStarters: config?.chatStarters ?? [],
       // Only a stored `true` is on (a hand-written "true" is not)
       autoWorkingDirectory: config?.autoWorkingDirectory === true,
-      autoWorkingDirectoryFolders: config?.autoWorkingDirectoryFolders ?? [],
-      // Lines naming no usable folder, shown under the list (paths are relative to the working directory)
-      autoWorkingDirectoryIssues: config?.autoWorkingDirectoryFolders?.length && config.defaults?.workingDirectory
-        ? (await import('../../decisions/cwd-router')).parseFolderList(config.autoWorkingDirectoryFolders, config.defaults.workingDirectory, { describe: false }).issues
-        : [],
+      ...(await readAutoWorkingDirectoryFolders(config)),
     }
   })
 
@@ -419,6 +415,21 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const { getNetworkProxySettings } = await import('@craft-agent/shared/config/storage')
     return getNetworkProxySettings()
   })
+}
+
+/**
+ * The auto working directory folder list for the settings page, and the lines naming no usable
+ * folder (paths are relative to the working directory). Read leniently: a hand-edited list that is
+ * a string or holds non-strings never fails the whole page; odd entries show up as such lines.
+ */
+async function readAutoWorkingDirectoryFolders(config: { autoWorkingDirectoryFolders?: unknown; defaults?: { workingDirectory?: string } } | null | undefined) {
+  const { parseFolderList, readFolderListLines } = await import('../../decisions/cwd-router')
+  const lines = readFolderListLines(config?.autoWorkingDirectoryFolders)
+  const root = config?.defaults?.workingDirectory
+  return {
+    autoWorkingDirectoryFolders: lines,
+    autoWorkingDirectoryIssues: lines.length > 0 && root ? parseFolderList(lines, root, { describe: false }).issues : [],
+  }
 }
 
 /**

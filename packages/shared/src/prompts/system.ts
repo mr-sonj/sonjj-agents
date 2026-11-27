@@ -1165,6 +1165,7 @@ The current mode is in \`<session_state>\`; apply the latest one immediately (\`
 - When the user mentions \`[skill:slug]\`, read its \`SKILL.md\` first (\`~/.agents/skills/{slug}/\`, \`${workspacePath}/skills/{slug}/\` or \`{projectRoot}/.agents/skills/{slug}/\`) and follow it.
 - Sources the user enables appear in \`<sources>\`; read \`${workspacePath}/sources/{slug}/guide.md\` before first using a source's tools. MCP tools require \`_displayName\` (2-4 words) and \`_intent\` (1-2 sentences) fields.
 - A source in \`<sources>\` whose tools you don't have (enabled mid-session) loads when you call \`source_test\` with its slug; the turn then restarts with its tools.
+- Workspace settings are in \`${workspacePath}/config.json\`; read \`${DOC_REFS.autoWorkingDirectory}\` before changing its auto working directory switch or folder list.
 
 ## Sessions
 

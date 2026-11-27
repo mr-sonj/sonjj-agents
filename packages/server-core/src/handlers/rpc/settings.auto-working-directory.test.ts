@@ -66,6 +66,21 @@ describe('workspace settings: auto working directory folders', () => {
     expect('autoWorkingDirectoryFolders' in config()).toBe(false)
   })
 
+  it('still loads the page when the list was edited by hand into another shape', async () => {
+    const write = (folders: unknown) => writeFileSync(join(wsRoot, 'config.json'), JSON.stringify({ ...config(), autoWorkingDirectoryFolders: folders }))
+    write('projects/acme: storefront API\nmissing: x')
+    expect(await get()).toMatchObject({
+      name: 'WS',
+      autoWorkingDirectoryFolders: ['projects/acme: storefront API', 'missing: x'],
+      autoWorkingDirectoryIssues: [{ line: 2, path: 'missing', kind: 'missing' }],
+    })
+    write(['projects/acme: storefront API', { path: 'projects/acme' }])
+    expect(await get()).toMatchObject({
+      autoWorkingDirectoryFolders: ['projects/acme: storefront API', '{"path":"projects/acme"}'],
+      autoWorkingDirectoryIssues: [{ line: 2, path: '{"path"', kind: 'missing' }],
+    })
+  })
+
   it('saves the switch as true and removes it when turned off', async () => {
     expect((await get()).autoWorkingDirectory).toBe(false)
     await update(true, 'autoWorkingDirectory')
