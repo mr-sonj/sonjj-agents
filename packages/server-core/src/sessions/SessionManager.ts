@@ -6422,10 +6422,13 @@ export class SessionManager implements ISessionManager {
   private async autoRouteWorkingDirectory(managed: ManagedSession, message: string, attachments?: FileAttachment[]): Promise<void> {
     const from = managed.workingDirectory
     try {
-      const root = loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.workingDirectory
-      if (!root || !from) return
+      const config = loadWorkspaceConfig(managed.workspace.rootPath)
+      const root = config?.defaults?.workingDirectory
+      // Only the folders the workspace lists can be picked
+      const folders = config?.autoWorkingDirectoryFolders
+      if (!root || !from || !folders?.length) return
       const route = await routeWorkingDirectory(
-        { root, workingDirectory: from, message, attachments, sessionId: managed.id },
+        { root, workingDirectory: from, message, attachments, sessionId: managed.id, folders },
         { log: line => sessionLog.info(line) },
       )
       if (!route) return

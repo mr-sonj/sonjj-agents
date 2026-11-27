@@ -88,6 +88,7 @@ export type EditContextKey =
   | 'edit-views'
   | 'edit-tool-icons'
   | 'automation-config'
+  | 'auto-working-directory'
 
 /**
  * Full edit configuration including context for agent and example for UI.
@@ -555,6 +556,29 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
     example: 'Change the cron schedule to every 30 minutes',
     displayLabelKey: 'editPopover.label.automationConfiguration',
     exampleKey: 'editPopover.example.automationConfig',
+    model: 'default',
+    systemPromptPreset: 'mini',
+    inlineExecution: true,
+  }),
+
+  // Workspace Settings → Auto working directory (the session runs in the workspace's working directory)
+  'auto-working-directory': (location) => ({
+    context: {
+      label: 'Auto Working Directory Folders',
+      filePath: `${location}/config.json`,
+      context:
+        'The user is in Workspace Settings and pressed the edit button on the Auto working directory folder list. ' +
+        'The list is the top-level "autoWorkingDirectoryFolders" array of strings in this workspace config.json. ' +
+        'Each string is one line: "<folder path relative to the working directory>: <when to pick this folder>", ' +
+        'for example "projects/acme-api: Acme API: pricing, endpoints, API keys". Lines starting with # are comments. ' +
+        "A session's first message can only move to folders on this list, and the notes are what the decision model reads to pick one, " +
+        'so keep each note short and specific: what the project is, its topics, and the words the user would use for it (in their language). ' +
+        'This session runs in the working directory: to find projects, look through its folders (an AGENTS.md or CLAUDE.md marks a project) and read their AGENTS.md. ' +
+        'Keep entries the user did not ask to change, keep the JSON valid and change no other field. Confirm clearly what changed.',
+    },
+    example: 'Add the new project folders and describe each one',
+    displayLabelKey: 'editPopover.label.autoWorkingDirectory',
+    exampleKey: 'editPopover.example.autoWorkingDirectory',
     model: 'default',
     systemPromptPreset: 'mini',
     inlineExecution: true,

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -19,9 +19,9 @@ import {
   describeContextFile,
   describeFolder,
   describeRoute,
-  discoverCandidates,
   findNamedCandidates,
-  invalidateCwdCandidateCache,
+  normalizeFolderListLines,
+  parseFolderList,
   resolveWorkingDirectoryOrigin,
   routeWorkingDirectory,
   type CwdRouterDeps,
@@ -51,6 +51,16 @@ const pick = (choice: string, confidence: number) => ({ type: 'choice', choice, 
 const noul = (value: number) => ({ type: 'noul', noul: value })
 const off = async (): Promise<DecisionClientResolution> => ({ ok: false, failure: { kind: 'disabled', message: 'off' } })
 
+/** The workspace's folder list in these tests (`projects/notes` and `deep/a/b` exist but are not listed). */
+const FOLDERS = [
+  '# Projects the first message may move to',
+  'projects/acme: storefront API, prices and endpoints',
+  'projects/garden: planting calendar and watering',
+  '',
+  'content: blog posts and newsletters',
+  'content/drafts: articles waiting for review',
+]
+
 describe('cwd router', () => {
   let root: string
   let outside: string
@@ -74,15 +84,15 @@ describe('cwd router', () => {
   }
 
   const at = (rel = '') => (rel ? join(root, rel) : root)
-  const route = (message: string, from = '', extra: Partial<CwdRouterDeps> = {}, attachments?: { path?: string; name: string; type?: string }[]) =>
-    routeWorkingDirectory({ root, workingDirectory: at(from), message, attachments, sessionId: 's1' }, deps(extra))
+  const route = (message: string, from = '', extra: Partial<CwdRouterDeps> = {}, attachments?: { path?: string; name: string; type?: string }[], folders = FOLDERS) =>
+    routeWorkingDirectory({ root, workingDirectory: at(from), message, attachments, sessionId: 's1', folders }, deps(extra))
+  const listed = (lines = FOLDERS) => parseFolderList(lines, root).candidates
 
   beforeEach(() => {
     root = mkdtempSync(join(tmpdir(), 'cwd-router-'))
     outside = mkdtempSync(join(tmpdir(), 'cwd-router-outside-'))
     outcomes = []
     logs = []
-    invalidateCwdCandidateCache()
     write('AGENTS.md', '# Workspace\n\nEverything lives here.')
     write('projects/acme/AGENTS.md', '---\nproject_role: "Acme storefront API: pricing, endpoints"\ndescription: ignored\n---\n# Acme\n')
     write('projects/acme/tasks/rework/AGENTS.md', '# Rework pricing\n\nMove the pricing endpoint to v2.')
@@ -90,14 +100,7 @@ describe('cwd router', () => {
     write('projects/notes/readme.md', 'no context file here')
     write('content/AGENTS.md', '---\ntitle: Content studio\n---\n')
     write('content/drafts/AGENTS.md', '---\ndescription: >\n  Draft articles\n  waiting for review\n---\n')
-    write('_archive/old/AGENTS.md', '# Old')
-    write('.hidden/secret/AGENTS.md', '# Hidden')
-    write('node_modules/pkg/AGENTS.md', '# Package')
-    write('dist/AGENTS.md', '# Build output')
-    write('deep/a/b/AGENTS.md', '# Too deep')
-    writeFileSync(join(outside, 'AGENTS.md'), '# Outside')
-    symlinkSync(outside, join(root, 'link-out'))
-    symlinkSync(join(root, 'projects', 'garden'), join(root, 'link-in'))
+    write('deep/a/b/AGENTS.md', '# Deep')
   })
 
   afterEach(() => {
@@ -105,23 +108,62 @@ describe('cwd router', () => {
     rmSync(outside, { recursive: true, force: true })
   })
 
-  describe('discovery', () => {
-    it('lists folders with a context file up to two levels down, skipping hidden, archived, build and outside folders', () => {
-      expect(discoverCandidates(root).map(c => c.key)).toEqual(['content', 'content/drafts', 'projects/acme', 'projects/garden'])
+  describe('the folder list', () => {
+    it('keeps the listed folders in order, each described by its note and then its context file', () => {
+      expect(listed().map(c => [c.key, c.description])).toEqual([
+        ['projects/acme', 'storefront API, prices and endpoints (Acme storefront API: pricing, endpoints)'],
+        ['projects/garden', 'planting calendar and watering (Garden plans — Planting calendar, watering and seed orders.)'],
+        ['content', 'blog posts and newsletters (Content studio)'],
+        ['content/drafts', 'articles waiting for review (Draft articles waiting for review)'],
+      ])
+      expect(listed().map(c => c.path)).toEqual([at('projects/acme'), at('projects/garden'), at('content'), at('content/drafts')])
+      // Without a note, the context file alone; without a context file, the note alone
+      expect(listed(['projects/garden', 'projects/notes: my notes']).map(c => c.description)).toEqual(['Garden plans — Planting calendar, watering and seed orders.', 'my notes'])
+      expect(parseFolderList(FOLDERS, root, { describe: false }).candidates[0]!.description).toBe('storefront API, prices and endpoints')
     })
 
-    it('goes as deep as asked', () => {
-      expect(discoverCandidates(root, { maxDepth: 3 }).map(c => c.key)).toContain('deep/a/b')
-      // A symlink inside the root counts when the folder it points to is not listed itself
-      expect(discoverCandidates(root, { maxDepth: 1 }).map(c => c.key)).toEqual(['content', 'link-in'])
+    it('reports lines that name no folder inside the root, and skips them', () => {
+      const { candidates, issues } = parseFolderList([
+        '/somewhere/else: absolute',
+        '../escape: outside',
+        '.: the root itself',
+        ': no folder',
+        'missing/folder: not there',
+        'projects/acme: first',
+        'projects/acme/: again',
+        './projects/garden/: written loosely',
+        '# a comment: not a folder',
+      ], root)
+      expect(candidates.map(c => c.key)).toEqual(['projects/acme', 'projects/garden'])
+      expect(issues).toEqual([
+        { line: 1, path: '/somewhere/else', kind: 'outside_root' },
+        { line: 2, path: '../escape', kind: 'outside_root' },
+        { line: 3, path: '.', kind: 'outside_root' },
+        { line: 4, path: '', kind: 'no_path' },
+        { line: 5, path: 'missing/folder', kind: 'missing' },
+        { line: 7, path: 'projects/acme/', kind: 'duplicate' },
+      ])
     })
 
-    it('describes a folder by project_role, description or title, else its H1 and first paragraph', () => {
-      const byKey = Object.fromEntries(discoverCandidates(root).map(c => [c.key, c.description]))
-      expect(byKey['projects/acme']).toBe('Acme storefront API: pricing, endpoints')
-      expect(byKey['content']).toBe('Content studio')
-      expect(byKey['content/drafts']).toBe('Draft articles waiting for review')
-      expect(byKey['projects/garden']).toBe('Garden plans — Planting calendar, watering and seed orders.')
+    it('uses at most the first MAX_CANDIDATES folders', () => {
+      const lines: string[] = []
+      for (let i = 0; i <= MAX_CANDIDATES; i++) {
+        mkdirSync(join(root, `many/p${i}`), { recursive: true })
+        lines.push(`many/p${i}: project ${i}`)
+      }
+      const { candidates, issues } = parseFolderList(lines, root, { describe: false })
+      expect(candidates).toHaveLength(MAX_CANDIDATES)
+      expect(issues).toEqual([{ line: MAX_CANDIDATES + 1, path: `many/p${MAX_CANDIDATES}`, kind: 'too_many' }])
+    })
+
+    it('is stored as lines without trailing spaces or blank lines', () => {
+      expect(normalizeFolderListLines('a: x  \r\nb: y\n\n\n')).toEqual(['a: x', 'b: y'])
+      expect(normalizeFolderListLines(['a: x', 'b: y\nc: z', '', ''])).toEqual(['a: x', 'b: y', 'c: z'])
+      expect(normalizeFolderListLines(null)).toEqual([])
+      expect(() => normalizeFolderListLines([1, 2])).toThrow()
+    })
+
+    it('describes context files by project_role, description or title, else their H1 and first paragraph', () => {
       expect(describeContextFile(`# T\n\n${'word '.repeat(100)}`).length).toBeLessThanOrEqual(200)
       expect(describeContextFile('No heading, just text\nover two lines.\n\nSecond paragraph.')).toBe('No heading, just text over two lines.')
     })
@@ -133,27 +175,17 @@ describe('cwd router', () => {
       expect(describeFolder(at('projects/notes/deeper'), root)).toBe('Workspace — Everything lives here.')
     })
 
-    it('caches per root until a context file changes', () => {
-      const first = discoverCandidates(root)
-      expect(discoverCandidates(root)).toBe(first)
-      write('projects/garden/CLAUDE.md', '# Garden\n\nNow about compost.')
-      utimesSync(join(root, 'projects/garden/CLAUDE.md'), new Date(), new Date(Date.now() + 5_000))
-      const second = discoverCandidates(root)
-      expect(second).not.toBe(first)
-      expect(second.find(c => c.key === 'projects/garden')?.description).toBe('Garden — Now about compost.')
-    })
-
-    it('does not run with more than the candidate limit', async () => {
-      for (let i = 0; i <= MAX_CANDIDATES; i++) write(`many/p${String(i).padStart(3, '0')}/AGENTS.md`, '# P')
+    it('does not run without a usable folder in the list', async () => {
       const model = jev({ target: pick('stay', 0.9) })
-      expect(await route('anything', '', { resolveClient: model.resolveClient })).toBeNull()
+      expect(await route('plan the garden', '', { resolveClient: model.resolveClient }, undefined, [])).toBeNull()
+      expect(await route('plan the garden', '', { resolveClient: model.resolveClient }, undefined, ['missing: x', '# only a comment'])).toBeNull()
       expect(model.bodies).toHaveLength(0)
-      expect(logs.some(line => line.includes('candidate folders'))).toBe(true)
+      expect(logs.some(line => line.includes('1 (missing)'))).toBe(true)
     })
   })
 
   describe('hard signals', () => {
-    const candidates = () => discoverCandidates(root)
+    const candidates = () => listed()
 
     it('collects mentioned, @-mentioned, absolute and attached paths', () => {
       const paths = collectMessagePaths(
@@ -183,8 +215,8 @@ describe('cwd router', () => {
     it('matches folder names as whole tokens, any case, at least four characters', () => {
       write('projects/api/AGENTS.md', '# API')
       write('projects/acme-api/AGENTS.md', '# Acme API')
-      invalidateCwdCandidateCache()
-      const keys = (message: string) => findNamedCandidates(message, discoverCandidates(root)).map(c => c.key)
+      const candidates = listed(['projects/acme', 'projects/acme-api', 'projects/api', 'projects/garden'])
+      const keys = (message: string) => findNamedCandidates(message, candidates).map(c => c.key)
       expect(keys('check the ACME pricing')).toEqual(['projects/acme'])
       expect(keys('check acme-api and the garden.')).toEqual(['projects/acme-api', 'projects/garden'])
       expect(keys('the api is down')).toEqual([])
@@ -203,6 +235,23 @@ describe('cwd router', () => {
       const model = jev({ target: pick('stay', 0.9) })
       expect(await route('plan the garden for spring', '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'route', reason: 'name', to: 'projects/garden' })
       expect(model.bodies).toHaveLength(0)
+    })
+
+    it('only knows listed folders: a path elsewhere keeps the session put, other names are no signal', async () => {
+      const model = jev({ target: pick('stay', 0.9) })
+      // A path in the current folder outside every listed one
+      expect(await route(`look at ${at('projects/notes/todo.md')}`, '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'path', rule: 'here' })
+      expect(model.bodies).toHaveLength(0)
+      // `notes` is a folder, but not listed: the model is asked, and never offered it
+      expect(await route('clean up my notes', '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'model' })
+      expect(Object.keys(model.bodies[0]!.questions.target!.criteria!)).toEqual(['projects/acme', 'projects/garden', 'content', 'content/drafts', 'stay', 'unclear'])
+    })
+
+    it('never takes a word from a note for a hard signal', async () => {
+      const model = jev({ target: pick('projects/garden', 0.6) })
+      // "watering" is only in the garden note: the model is asked, and 0.6 is below the root threshold
+      expect(await route('make a watering schedule', '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'model', rule: 'below_threshold' })
+      expect(model.bodies).toHaveLength(1)
     })
 
     it('narrows the options to the folders named when several are', async () => {
@@ -252,15 +301,12 @@ describe('cwd router', () => {
     })
 
     it('never moves within a branch: task to its project, project to its child, task to a sibling', async () => {
-      write('projects/acme/tasks/AGENTS.md', '# Tasks')  // depth 3: not a candidate
-      write('content/drafts/AGENTS.md', '# Drafts')
-      invalidateCwdCandidateCache()
       // A task folder and its project (a path to the project's AGENTS.md)
       expect(await route(`edit ${at('projects/acme/AGENTS.md')}`, 'projects/acme/tasks/rework')).toMatchObject({ action: 'stay', reason: 'path', rule: 'same_branch', to: 'projects/acme' })
       // A project and a folder inside it
       const child = jev({ belongs_here: noul(0.1), target: pick('content/drafts', 0.95) }).resolveClient
       expect(await route('move it to drafts', 'content', { resolveClient: child })).toMatchObject({ action: 'stay', rule: 'same_branch' })
-      // A task below a project and another candidate inside that project
+      // A task below a project and another listed folder inside that project
       mkdirSync(join(root, 'content/post-a'), { recursive: true })
       expect(await route('move it to drafts', 'content/post-a', { resolveClient: child })).toMatchObject({ action: 'stay', rule: 'same_branch' })
     })
@@ -278,14 +324,8 @@ describe('cwd router', () => {
       ])
     })
 
-    it('does not run outside the root or without candidates', async () => {
-      expect(await routeWorkingDirectory({ root, workingDirectory: outside, message: 'x' }, deps())).toBeNull()
-      const empty = mkdtempSync(join(tmpdir(), 'cwd-router-empty-'))
-      try {
-        expect(await routeWorkingDirectory({ root: empty, workingDirectory: empty, message: 'x' }, deps())).toBeNull()
-      } finally {
-        rmSync(empty, { recursive: true, force: true })
-      }
+    it('does not run outside the root', async () => {
+      expect(await routeWorkingDirectory({ root, workingDirectory: outside, message: 'x', folders: FOLDERS }, deps())).toBeNull()
     })
   })
 

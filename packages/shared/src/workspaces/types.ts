@@ -74,6 +74,13 @@ export interface WorkspaceConfig {
    */
   chatStarters?: ChatStarter[];
 
+  /**
+   * Auto working directory (decision toggle `autoWorkingDirectory`): the only folders a session's
+   * first message may move to. One line each, `<path relative to defaults.workingDirectory>: <when
+   * to pick it>`; lines starting with `#` are comments.
+   */
+  autoWorkingDirectoryFolders?: string[];
+
   createdAt: number;
   updatedAt: number;
 }

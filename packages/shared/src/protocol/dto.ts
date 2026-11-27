@@ -832,6 +832,24 @@ export interface WorkspaceSettings {
   defaultLlmConnection?: string
   enabledSourceSlugs?: string[]
   chatStarters?: Array<{ label: string; prompt: string }>
+  /** Auto working directory: the folders a session's first message may move to, one `path: note` line each */
+  autoWorkingDirectoryFolders?: string[]
+  /** Lines of that list that name no usable folder (read-only, checked by the server) */
+  autoWorkingDirectoryIssues?: AutoWorkingDirectoryIssue[]
+}
+
+/** A line of the auto working directory folder list that is not used. */
+export interface AutoWorkingDirectoryIssue {
+  /** 1-based line number in the list */
+  line: number
+  /** The path as written */
+  path: string
+  /**
+   * `no_path`: nothing before the `:`; `outside_root`: absolute, the working directory itself or
+   * outside it; `missing`: no such folder; `duplicate`: listed on an earlier line; `too_many`:
+   * beyond the 200 folders used.
+   */
+  kind: 'no_path' | 'outside_root' | 'missing' | 'duplicate' | 'too_many'
 }
 
 // ---------------------------------------------------------------------------

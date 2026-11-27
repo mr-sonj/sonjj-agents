@@ -16,6 +16,10 @@ describe('auto working directory', () => {
   let agentCreatedIn: Array<{ workingDirectory?: string; sdkCwd?: string }>
   let configBefore: string
 
+  function writeConfig(folders?: string[]) {
+    writeFileSync(join(wsRoot, 'config.json'), JSON.stringify({ id: 'ws-test', name: 'Test', slug: 'test', defaults: { workingDirectory: projectRoot }, ...(folders ? { autoWorkingDirectoryFolders: folders } : {}) }))
+  }
+
   function write(rel: string, content: string) {
     const file = join(projectRoot, rel)
     mkdirSync(join(file, '..'), { recursive: true })
@@ -28,9 +32,8 @@ describe('auto working directory', () => {
     write('AGENTS.md', '# Root')
     write('projects/acme/AGENTS.md', '# Acme\n\nStorefront API.')
     write('projects/garden/CLAUDE.md', '# Garden\n\nPlanting calendar.')
-    writeFileSync(join(wsRoot, 'config.json'), JSON.stringify({ id: 'ws-test', name: 'Test', slug: 'test', defaults: { workingDirectory: projectRoot } }))
+    writeConfig(['projects/acme: storefront API', 'projects/garden: planting and watering'])
     configBefore = readFileSync(join(wsRoot, 'config.json'), 'utf-8')
-    cwdRouter.invalidateCwdCandidateCache()
 
     sm = new SessionManager()
     events = []
@@ -150,6 +153,22 @@ describe('auto working directory', () => {
       expect(router).not.toHaveBeenCalled()
     })
   }
+
+  it('does not ask when the workspace lists no folders', async () => {
+    writeConfig()
+    const managed = await session('no-list')
+    const router = spyOn(cwdRouter, 'routeWorkingDirectory')
+    await sm.sendMessage(managed.id, 'plan the garden for spring')
+    expect(router).not.toHaveBeenCalled()
+    expect(managed.workingDirectory).toBe(projectRoot)
+  })
+
+  it('passes the folder list to the router', async () => {
+    const managed = await session('list')
+    const router = spyOn(cwdRouter, 'routeWorkingDirectory').mockResolvedValue(null)
+    await sm.sendMessage(managed.id, 'hello')
+    expect(router.mock.calls[0]![0].folders).toEqual(['projects/acme: storefront API', 'projects/garden: planting and watering'])
+  })
 
   it('does not ask when the toggle is off', async () => {
     ;(sm as any).decisionFeatureActive = () => false

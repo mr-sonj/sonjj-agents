@@ -22,6 +22,7 @@ import { cn } from '@/lib/utils'
 import { routes } from '@/lib/navigate'
 import { Spinner } from '@craft-agent/ui'
 import { RenameDialog } from '@/components/ui/rename-dialog'
+import { AutoWorkingDirectoryFolders } from './AutoWorkingDirectoryFolders'
 import type { PermissionMode, WorkspaceSettings, LoadedSource } from '../../../shared/types'
 import { useDirectoryPicker } from '@/hooks/useDirectoryPicker'
 import { useAvailablePermissionModes } from '@/hooks/useAvailablePermissionModes'
@@ -518,6 +519,9 @@ export default function WorkspaceSettingsPage() {
           <p className="text-label text-tertiary">{t("settings.workspace.noSourcesConfigured")}</p>
         )}
       </SettingsSection>
+
+      {/* Folders a session's first message may move to (decision toggle autoWorkingDirectory) */}
+      <AutoWorkingDirectoryFolders key={activeWorkspaceId} workspaceId={activeWorkspaceId} />
 
       {/* Advanced */}
       <SettingsSection title={t("settings.workspace.advanced")}>

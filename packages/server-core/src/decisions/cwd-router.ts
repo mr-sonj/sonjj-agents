@@ -6,20 +6,23 @@
  * the user had picked the folder. Staying put is the default: without a clear signal, or without
  * an answer, the session keeps its folder.
  *
- * Candidates are the folders up to `CANDIDATE_SCAN_DEPTH` below the context root (the
- * workspace's `defaults.workingDirectory`) that hold an AGENTS.md or CLAUDE.md. Hard signals are
- * checked first: a path in the message or an attachment, then a folder named in the message. The
- * model is asked (one call: does the message belong where the session is, and which folder is it
- * about) only when they do not settle it. Only paths relative to the root reach the provider.
+ * The only folders it may move to are those the workspace lists (`autoWorkingDirectoryFolders`,
+ * paths relative to the context root, the workspace's `defaults.workingDirectory`), each with a
+ * note on when to pick it; a listed folder's AGENTS.md/CLAUDE.md adds to that note. Hard signals
+ * are checked first: a path in the message or an attachment, then a listed folder's name in the
+ * message (words in the notes are never hard signals). The model is asked (one call: does the
+ * message belong where the session is, and which folder is it about) only when they do not
+ * settle it. Only paths relative to the root reach the provider.
  *
- * SessionManager decides when this runs and applies the result; apart from reading the
- * candidate folders this module has no side effects.
+ * SessionManager decides when this runs and applies the result; apart from reading the listed
+ * folders this module has no side effects.
  */
 
-import { readdirSync, readFileSync, realpathSync, statSync, type Dirent } from 'node:fs'
+import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DecisionRequest, DecisionResult } from '@craft-agent/shared/decisions'
+import type { AutoWorkingDirectoryIssue } from '@craft-agent/shared/protocol'
 import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { isValidWorkingDirectory } from '../utils/path-validation'
 import { FOREGROUND_MAX_DEADLINE_MS, openDecisionPoint, recordDecisionOutcome, type DecisionPointDeps } from './decision-point'
@@ -33,25 +36,21 @@ export const ROUTE_LATERAL_AT = 0.85
 /** Below this the model's pick never moves the session. */
 export const MIN_TARGET_CONFIDENCE = 0.5
 
-/** Levels below the root searched for candidate folders. */
-export const CANDIDATE_SCAN_DEPTH = 2
-/** More candidates than this and the router does not run. */
+/** Folders of the list used at most (the model takes up to 255 options). */
 export const MAX_CANDIDATES = 200
 /** Folder names shorter than this are not matched in the message. */
 export const MIN_NAME_LENGTH = 4
 /** Message characters sent to the model. */
 export const MESSAGE_MAX_CHARS = 2_000
-/** Characters of a folder description sent to the model. */
+/** Characters of a folder's context-file description sent to the model. */
 export const DESCRIPTION_MAX_CHARS = 200
+/** Characters of a folder's note in the list sent to the model. */
+export const NOTE_MAX_CHARS = 400
 
-/** Folders the candidate scan reads at most. */
-const MAX_SCAN_DIRS = 2_000
 /** Bytes read from a context file for its description. */
 const CONTEXT_FILE_READ_BYTES = 16 * 1024
 /** Context files, in priority order, matched case-insensitively. */
 const CONTEXT_FILE_NAMES = ['agents.md', 'claude.md']
-/** Never candidates, nor searched (hidden folders are skipped as well). */
-const SKIPPED_FOLDERS = new Set(['node_modules', '_archive', 'dist', 'build'])
 const DESCRIPTION_FIELDS = ['project_role', 'description', 'title']
 
 const STAY = 'stay'
@@ -61,7 +60,7 @@ const ROOT_LABEL = '(root)'
 export interface CwdCandidate {
   /** Path below the root with `/` separators, e.g. `projects/acme`: the option key sent to the model. */
   key: string
-  /** Absolute path, as listed under the root (a symlinked folder keeps its link path). */
+  /** Absolute path below the root. */
   path: string
   description: string
 }
@@ -101,6 +100,8 @@ export interface CwdRouterInput {
   message: string
   attachments?: readonly { path?: string; name: string; type?: string }[]
   sessionId?: string
+  /** The workspace's folder list (`autoWorkingDirectoryFolders`, see `parseFolderList`). */
+  folders: readonly string[] | undefined
 }
 
 export interface CwdRouterDeps extends DecisionPointDeps {
@@ -125,14 +126,6 @@ export function isSameDirectory(a: string | undefined, b: string | undefined): b
 
 function keyOf(root: string, path: string): string {
   return relative(root, path).split(sep).join('/')
-}
-
-function safeRealpath(path: string): string | null {
-  try {
-    return realpathSync(path)
-  } catch {
-    return null
-  }
 }
 
 /**
@@ -170,103 +163,77 @@ function contextFileIn(entries: readonly Dirent[]): string | null {
   return null
 }
 
-interface ScanFolder {
-  dir: string
-  rel: string
-  real: string
-  /** Reached through a symlink */
-  linked: boolean
-}
-
-/** Subfolders worth a look: not hidden, not skipped, symlinks only when they stay inside the root. */
-function subfolders(parent: Pick<ScanFolder, 'dir' | 'rel' | 'linked'>, entries: readonly Dirent[], realRoot: string): ScanFolder[] {
-  const folders: ScanFolder[] = []
-  for (const entry of [...entries].sort((a, b) => a.name.localeCompare(b.name))) {
-    const name = entry.name
-    if (name.startsWith('.') || SKIPPED_FOLDERS.has(name.toLowerCase()) || entry.isFile()) continue
-    const dir = join(parent.dir, name)
-    const real = safeRealpath(dir)
-    if (!real || !isWithin(realRoot, real)) continue
-    // A symlink, or an entry whose type the filesystem did not report
-    if (!entry.isDirectory()) {
-      try {
-        if (!statSync(real).isDirectory()) continue
-      } catch {
-        continue
-      }
-    }
-    folders.push({ dir, rel: parent.rel ? `${parent.rel}/${name}` : name, real, linked: parent.linked || entry.isSymbolicLink() })
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
   }
-  return folders
 }
 
-interface FoundContextFile { key: string; path: string; real: string; linked: boolean; file: string; stamp: string }
+/** A line of the folder list that is not used, and why. */
+export type FolderListIssue = AutoWorkingDirectoryIssue
 
-/** One entry per real folder: the one reached without a symlink if there is one, else the first. */
-function dedupeByRealPath(found: readonly FoundContextFile[]): FoundContextFile[] {
-  const kept = new Map<string, FoundContextFile>()
-  for (const item of found) {
-    const previous = kept.get(item.real)
-    if (!previous || (previous.linked && !item.linked)) kept.set(item.real, item)
+/**
+ * The folder list as stored: a string (split into lines) or an array of strings, without
+ * trailing spaces or trailing blank lines. Throws on anything else.
+ */
+export function normalizeFolderListLines(value: unknown): string[] {
+  if (value === undefined || value === null) return []
+  const lines = typeof value === 'string' ? value.split(/\r?\n/) : value
+  if (!Array.isArray(lines) || !lines.every(line => typeof line === 'string')) {
+    throw new Error('autoWorkingDirectoryFolders must be a list of lines')
   }
-  const keep = new Set(kept.values())
-  return found.filter(item => keep.has(item))
+  const trimmed = (lines as string[]).flatMap(line => line.split(/\r?\n/)).map(line => line.trimEnd())
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1] === '') trimmed.pop()
+  return trimmed
 }
 
-const candidateCache = new Map<string, { signature: string; candidates: CwdCandidate[] }>()
-
-/** Forget cached candidates (tests; the cache also refreshes itself when a context file changes). */
-export function invalidateCwdCandidateCache(): void {
-  candidateCache.clear()
+/** A listed folder's note followed by what its AGENTS.md/CLAUDE.md says, when it has one. */
+function describeListedFolder(path: string, note: string): string {
+  const file = contextFileIn(readEntries(path))
+  const fromFile = file ? describeContextFileAt(join(path, file)) : ''
+  const clipped = clip(note, NOTE_MAX_CHARS)
+  return clipped && fromFile ? `${clipped} (${fromFile})` : clipped || fromFile
 }
 
 /**
- * Folders up to `maxDepth` below `root` that hold an AGENTS.md or CLAUDE.md, shallowest first
- * and by name. Skips hidden folders, `node_modules`, `_archive`, `dist`, `build` and symlinks
- * that lead outside the root. Descriptions are cached per root until a context file's mtime or
- * size changes.
+ * The workspace's folder list (`autoWorkingDirectoryFolders`): the only folders the router may
+ * move a session to. One line per folder, `<path relative to the root>: <when to pick it>`;
+ * blank lines and lines starting with `#` are skipped, and a folder name may not contain `:`.
+ * Lines naming no folder below the root are reported as issues and skipped. `describe: false`
+ * only checks the lines (no context files are read).
  */
-export function discoverCandidates(root: string, options: { maxDepth?: number } = {}): CwdCandidate[] {
-  const maxDepth = options.maxDepth ?? CANDIDATE_SCAN_DEPTH
+export function parseFolderList(
+  lines: readonly string[] | undefined,
+  root: string,
+  options: { describe?: boolean } = {},
+): { candidates: CwdCandidate[]; issues: FolderListIssue[] } {
   const rootPath = resolve(root)
-  const realRoot = safeRealpath(rootPath)
-  if (!realRoot) return []
-
-  const scanned: FoundContextFile[] = []
-  let dirsRead = 0
-  let level = subfolders({ dir: rootPath, rel: '', linked: false }, readEntries(rootPath), realRoot)
-  for (let depth = 1; level.length > 0 && dirsRead < MAX_SCAN_DIRS; depth++) {
-    const next: typeof level = []
-    for (const folder of level) {
-      if (++dirsRead > MAX_SCAN_DIRS) break
-      const entries = readEntries(folder.dir)
-      const file = contextFileIn(entries)
-      if (file) {
-        let stamp = ''
-        try {
-          const stat = statSync(join(folder.dir, file))
-          stamp = `${stat.mtimeMs}:${stat.size}`
-        } catch {
-          // unreadable: described as empty below
-        }
-        scanned.push({ key: folder.rel, path: folder.dir, real: folder.real, linked: folder.linked, file, stamp })
-      }
-      // The depth bound also ends symlink cycles
-      if (depth < maxDepth) next.push(...subfolders(folder, entries, realRoot))
+  const candidates: CwdCandidate[] = []
+  const issues: FolderListIssue[] = []
+  const seen = new Set<string>()
+  ;(lines ?? []).forEach((raw, index) => {
+    const text = raw.trim()
+    if (!text || text.startsWith('#')) return
+    const colon = text.indexOf(':')
+    const written = (colon >= 0 ? text.slice(0, colon) : text).trim()
+    const note = colon >= 0 ? text.slice(colon + 1).trim() : ''
+    const rel = written.replace(/^\.[\\/]+/, '').replace(/[\\/]+$/, '')
+    const line = index + 1
+    if (!rel) return void issues.push({ line, path: written, kind: 'no_path' })
+    const path = resolve(rootPath, rel)
+    if (isAbsolute(rel) || rel.startsWith('~') || path === rootPath || !isWithin(rootPath, path)) {
+      return void issues.push({ line, path: written, kind: 'outside_root' })
     }
-    level = next
-  }
-  const found = dedupeByRealPath(scanned.filter(item => item.real !== realRoot))
-
-  const signature = found.map(f => `${f.key}\0${f.file}\0${f.stamp}`).join('\n')
-  const cacheKey = `${rootPath}\0${maxDepth}`
-  const cached = candidateCache.get(cacheKey)
-  if (cached?.signature === signature) return cached.candidates
-  // Over the limit the router does not run: no point reading the files
-  const describe = found.length <= MAX_CANDIDATES
-  const candidates = found.map(f => ({ key: f.key, path: f.path, description: describe ? describeContextFileAt(join(f.path, f.file)) : '' }))
-  candidateCache.set(cacheKey, { signature, candidates })
-  return candidates
+    const key = keyOf(rootPath, path)
+    if (seen.has(key)) return void issues.push({ line, path: written, kind: 'duplicate' })
+    seen.add(key)
+    if (!isDirectory(path)) return void issues.push({ line, path: written, kind: 'missing' })
+    if (candidates.length >= MAX_CANDIDATES) return void issues.push({ line, path: written, kind: 'too_many' })
+    candidates.push({ key, path, description: options.describe === false ? note : describeListedFolder(path, note) })
+  })
+  return { candidates, issues }
 }
 
 /** The deepest candidate that is `path` or contains it. */
@@ -293,7 +260,7 @@ function unquote(value: string): string {
 
 /** Top-level scalar fields of a leading `---` frontmatter block (block scalars folded), and the body after it. */
 export function splitFrontmatter(content: string): { fields: Record<string, string>; body: string } {
-  const lines = content.replace(/^﻿/, '').split(/\r?\n/)
+  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/)
   if (lines[0]?.trim() !== '---') return { fields: {}, body: content }
   const end = lines.findIndex((line, i) => i > 0 && (line.trim() === '---' || line.trim() === '...'))
   if (end < 0) return { fields: {}, body: content }
@@ -513,6 +480,12 @@ export interface CwdRouteContext {
   isValid: (path: string) => boolean
 }
 
+/** The listed folder the session is in keeps its note; a folder below it is described by its own context file first. */
+function describeCurrent(ctx: CwdRouteContext, root: string): string {
+  if (ctx.current && ctx.current.path === ctx.workingDirectory) return ctx.current.description
+  return describeFolder(ctx.workingDirectory, root) || ctx.current?.description || ''
+}
+
 /** The target contains the working directory, lies below it, or lies inside the current project. */
 function sameBranch(ctx: CwdRouteContext, target: CwdCandidate): boolean {
   return isWithin(target.path, ctx.workingDirectory)
@@ -564,7 +537,7 @@ export function judgeModelAnswer(
 
 /**
  * Where the session's first message says it should work. `null` when the router does not apply
- * (the folder is outside the root, no or too many candidates). Never throws on a model failure;
+ * (the folder is outside the root, or no listed folder is usable). Never throws on a model failure;
  * a filesystem error may throw, so callers wrap it.
  */
 export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRouterDeps = {}): Promise<CwdRoute | null> {
@@ -575,12 +548,9 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
     deps.log?.(`${tag} skipped: the working directory is outside the context root`)
     return null
   }
-  const candidates = discoverCandidates(root)
+  const { candidates, issues } = parseFolderList(input.folders, root)
+  if (issues.length > 0) deps.log?.(`${tag} folder list lines skipped: ${issues.map(issue => `${issue.line} (${issue.kind})`).join(', ')}`)
   if (candidates.length === 0) return null
-  if (candidates.length > MAX_CANDIDATES) {
-    deps.log?.(`${tag} skipped: ${candidates.length} candidate folders (more than ${MAX_CANDIDATES})`)
-    return null
-  }
 
   const atRoot = workingDirectory === root
   const ctx: CwdRouteContext = {
@@ -608,7 +578,7 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
   const request = buildCwdRouterRequest({
     message: input.message,
     attachments: input.attachments?.map(attachment => (attachment.type ? `${attachment.name} (${attachment.type})` : attachment.name)),
-    current: { path: ctx.from, description: describeFolder(workingDirectory, root) },
+    current: { path: ctx.from, description: describeCurrent(ctx, root) },
     options,
     askBelongsHere: !atRoot,
   })

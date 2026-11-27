@@ -152,11 +152,17 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
       chatStarters: config?.chatStarters ?? [],
+      autoWorkingDirectoryFolders: config?.autoWorkingDirectoryFolders ?? [],
+      // Lines naming no usable folder, shown under the list (paths are relative to the working directory)
+      autoWorkingDirectoryIssues: config?.autoWorkingDirectoryFolders?.length && config.defaults?.workingDirectory
+        ? (await import('../../decisions/cwd-router')).parseFolderList(config.autoWorkingDirectoryFolders, config.defaults.workingDirectory, { describe: false }).issues
+        : [],
     }
   })
 
   // Update a workspace setting
   server.handle(RPC_CHANNELS.workspace.SETTINGS_UPDATE, async (_ctx, workspaceId: string, key: string, value: unknown) => {
+    if (key === 'autoWorkingDirectoryFolders') return saveAutoWorkingDirectoryFolders(workspaceId, value, deps)
     const workspace = getWorkspaceOrThrow(workspaceId)
     const normalizedValue = key === 'workingDirectory' && typeof value === 'string'
       ? value.trim()
@@ -410,4 +416,21 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const { getNetworkProxySettings } = await import('@craft-agent/shared/config/storage')
     return getNetworkProxySettings()
   })
+}
+
+/**
+ * Auto working directory folder list (top-level `autoWorkingDirectoryFolders`): saved as typed,
+ * one line per entry; the lines are checked when the settings are read.
+ */
+async function saveAutoWorkingDirectoryFolders(workspaceId: string, value: unknown, deps: HandlerDeps): Promise<void> {
+  const workspace = getWorkspaceOrThrow(workspaceId)
+  const { normalizeFolderListLines } = await import('../../decisions/cwd-router')
+  const lines = normalizeFolderListLines(value)
+  const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+  const config = loadWorkspaceConfig(workspace.rootPath)
+  if (!config) throw new Error(`Failed to load workspace config: ${workspaceId}`)
+  if (lines.length > 0) config.autoWorkingDirectoryFolders = lines
+  else delete config.autoWorkingDirectoryFolders
+  saveWorkspaceConfig(workspace.rootPath, config)
+  deps.platform.logger.info(`Workspace setting updated: autoWorkingDirectoryFolders (${lines.length} lines)`)
 }
