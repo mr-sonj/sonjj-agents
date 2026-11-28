@@ -8,7 +8,7 @@ mock.module('../../config/preferences.ts', () => ({
   formatPreferencesForPrompt: () => '',
 }))
 
-import { getSystemPrompt } from '../system'
+import { getMiniAgentSystemPrompt, getSystemPrompt } from '../system'
 import { DOC_REFS } from '../../docs/index.ts'
 
 // Auto working directory: an agent in any session must find the guide and the workspace config,
@@ -28,6 +28,11 @@ describe('system prompt: auto working directory', () => {
   it('points Coding mode agents at the guide too', () => {
     const coding = getSystemPrompt(undefined, undefined, '/tmp/workspace', '/tmp/workspace', undefined, undefined, true, undefined, 'coding')
     expect(coding).toContain(`Workspace settings are in \`/tmp/workspace/config.json\`; read \`${DOC_REFS.autoWorkingDirectory}\``)
+  })
+
+  it('points the mini agent (Settings edit buttons) at the guide too', () => {
+    const mini = getMiniAgentSystemPrompt('/tmp/workspace')
+    expect(mini).toContain(`folder list in the workspace \`config.json\`, read \`${DOC_REFS.autoWorkingDirectory}\``)
   })
 
   it('ships the guide with both keys and the line format', () => {
