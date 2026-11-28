@@ -55,11 +55,17 @@ const DESCRIPTION_FIELDS = ['project_role', 'description', 'title']
 
 const STAY = 'stay'
 const UNCLEAR = 'unclear'
+/** The option for the folder the latest chat worked in. */
+export const LAST = 'last'
+/** Option keys a listed folder may not have. */
+const RESERVED_KEYS = new Set([STAY, UNCLEAR, LAST])
 const ROOT_LABEL = '(root)'
 
 const TARGET_INSTRUCTIONS = 'Which project folder is this message about?'
 const STAY_CRITERION = 'Not clearly about any listed folder, or about the current one'
 const UNCLEAR_CRITERION = 'Cannot tell'
+const LAST_CRITERION = 'the folder the previous chat worked in. Pick it only when the message continues earlier work ("continue", "keep going", "làm tiếp", "tiếp tục"), not for a new topic.'
+const LAST_LISTED_NOTE = 'Also the folder the previous chat worked in: pick it for a follow-up like "continue".'
 
 export interface CwdCandidate {
   /** Path below the root with `/` separators, e.g. `projects/acme`: the option key sent to the model. */
@@ -108,6 +114,8 @@ export interface CwdRoute {
   rule?: CwdStayRule
   /** Which model was asked: the decision model or the connection's small model. */
   via?: 'jev' | 'mini_model'
+  /** The target is the folder the latest chat worked in (option `last`). */
+  last?: true
 }
 
 export interface CwdRouterInput {
@@ -120,6 +128,8 @@ export interface CwdRouterInput {
   sessionId?: string
   /** The workspace's folder list (`autoWorkingDirectoryFolders`, see `parseFolderList`). */
   folders: readonly string[] | undefined
+  /** The folder the latest chat worked in (see `pickLastWorkingDirectory`): offered for a follow-up. */
+  lastWorkingDirectory?: string
 }
 
 export interface CwdRouterDeps extends DecisionPointDeps {
@@ -284,6 +294,48 @@ export function parseFolderList(
     candidates.push({ key, path, aliases, description: options.describe === false ? note : describeListedFolder(path, note, aliases) })
   })
   return { candidates, issues }
+}
+
+/**
+ * The folder the latest chat worked in: of `sessions` (the host's chats, already filtered), the
+ * one with the latest activity whose folder is inside the root and not the root itself.
+ */
+export function pickLastWorkingDirectory(
+  sessions: readonly { workingDirectory?: string; lastActivityAt: number }[],
+  root: string,
+): string | undefined {
+  let latest: { workingDirectory?: string; lastActivityAt: number } | undefined
+  for (const session of sessions) {
+    if (!session.workingDirectory || isSameDirectory(session.workingDirectory, root) || !isWithin(resolve(root), resolve(session.workingDirectory))) continue
+    if (!latest || session.lastActivityAt > latest.lastActivityAt) latest = session
+  }
+  return latest?.workingDirectory
+}
+
+/**
+ * The `last` option for `folder`, or `null` when it is not usable (missing, the root, outside it,
+ * rejected by `isValid`). When it is a listed folder, that folder's description says so instead and
+ * `candidates` comes back with the note added.
+ */
+function lastOption(
+  folder: string | undefined,
+  root: string,
+  candidates: CwdCandidate[],
+  isValid: (path: string) => boolean,
+): { option: CwdCandidate | null; candidates: CwdCandidate[] } {
+  const none = { option: null, candidates }
+  if (!folder) return none
+  const path = resolve(folder)
+  if (path === root || !isWithin(root, path) || !isDirectory(path) || !isValid(path)) return none
+  if (candidates.some(candidate => candidate.path === path)) {
+    return {
+      option: null,
+      candidates: candidates.map(candidate => (candidate.path === path ? { ...candidate, description: [candidate.description, LAST_LISTED_NOTE].filter(Boolean).join(' ') } : candidate)),
+    }
+  }
+  const fromFile = describeFolder(path, root)
+  const description = `${keyOf(root, path)} — ${LAST_CRITERION}${fromFile ? ` (${fromFile})` : ''}`
+  return { option: { key: LAST, path, description, aliases: [] }, candidates }
 }
 
 /** The deepest candidate that is `path` or contains it. */
@@ -588,7 +640,7 @@ export function judgeMiniModelAnswer(
   const target = choice ? options.find(option => option.key === choice) : undefined
   if (!target) return stay(ctx, 'model', 'no_answer', { via })
   const reason = named.find(candidate => candidate.key === target.key)?.match ?? 'model'
-  const picked = { to: target.key, via }
+  const picked = { ...pickedLabel(ctx, target), via }
   if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
   return { action: 'route', target: target.path, reason, from: ctx.from, ...picked }
 }
@@ -630,6 +682,11 @@ export interface CwdRouteContext {
   isValid: (path: string) => boolean
 }
 
+/** How a route names its target: its path below the root, flagged when it is the `last` option. */
+function pickedLabel(ctx: CwdRouteContext, target: CwdCandidate): { to: string; last?: true } {
+  return target.key === LAST ? { to: keyOf(ctx.root, target.path), last: true } : { to: target.key }
+}
+
 /** No folder picked: the session works in the root. */
 function stay(ctx: CwdRouteContext, reason: CwdRoute['reason'], rule: CwdStayRule, extra: Partial<CwdRoute> = {}): CwdRoute {
   return { action: 'stay', reason, from: ctx.from, rule, ...extra }
@@ -637,8 +694,8 @@ function stay(ctx: CwdRouteContext, reason: CwdRoute['reason'], rule: CwdStayRul
 
 /** A path or a folder name pointing at `target`, without the model. */
 export function judgeHardSignal(ctx: CwdRouteContext, target: CwdCandidate, reason: 'path' | CwdNameMatch): CwdRoute {
-  if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', { to: target.key })
-  return { action: 'route', target: target.path, reason, from: ctx.from, to: target.key }
+  if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', pickedLabel(ctx, target))
+  return { action: 'route', target: target.path, reason, from: ctx.from, ...pickedLabel(ctx, target) }
 }
 
 /** Apply the route rules to the decision model's answer. `named`: candidates named in the message. */
@@ -657,7 +714,7 @@ export function judgeModelAnswer(
   const hit = named.find(candidate => candidate.key === target.key)?.match
   const nameHit = hit !== undefined
   const reason = hit ?? 'model'
-  const picked = { confidence, to: target.key }
+  const picked = { confidence, ...pickedLabel(ctx, target) }
   if (confidence < MIN_TARGET_CONFIDENCE) return stay(ctx, reason, 'low_confidence', picked)
   if (!nameHit && confidence < ROUTE_FROM_ROOT_AT) return stay(ctx, reason, 'below_threshold', picked)
   if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
@@ -689,9 +746,12 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
     deps.log?.(`${tag} skipped: the working directory is outside the context root`)
     return null
   }
-  const { candidates, issues } = parseFolderList(input.folders, root)
+  const parsed = parseFolderList(input.folders, root)
+  const issues = parsed.issues
+  // Reserved option keys: such a folder can be neither offered nor told apart from them
+  const listed = parsed.candidates.filter(candidate => !RESERVED_KEYS.has(candidate.key))
   if (issues.length > 0) deps.log?.(`${tag} folder list lines skipped: ${issues.map(issue => `${issue.line} (${issue.kind})`).join(', ')}`)
-  if (candidates.length === 0) return null
+  if (listed.length === 0) return null
 
   const ctx: CwdRouteContext = {
     root,
@@ -699,7 +759,8 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
     from: workingDirectory === root ? ROOT_LABEL : keyOf(root, workingDirectory),
     isValid: deps.isValidDirectory ?? (path => isValidWorkingDirectory(path).valid),
   }
-  const picked = await pickFromRoot(ctx, input, candidates, deps)
+  const { option: last, candidates } = lastOption(input.lastWorkingDirectory, root, listed, ctx.isValid)
+  const picked = await pickFromRoot(ctx, input, candidates, last, deps)
   const route = settle(ctx, picked.route)
   // What happened to the session, for the decision model's answers only
   recordDecisionOutcome(picked.decision, {
@@ -710,24 +771,28 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
   return route
 }
 
-/** The pick from the root, with the decision model's answer when it was asked. */
+/**
+ * The pick from the root, with the decision model's answer when it was asked. `last`: the folder the
+ * latest chat worked in, for paths inside it and as a model option; never matched by name.
+ */
 async function pickFromRoot(
   ctx: CwdRouteContext,
   input: CwdRouterInput,
   candidates: CwdCandidate[],
+  last: CwdCandidate | null,
   deps: CwdRouterDeps,
 ): Promise<{ route: CwdRoute; decision?: DecisionResult | null }> {
   const settled = (route: CwdRoute) => ({ route })
   const paths = collectMessagePaths(input.message, input.attachments, { workingDirectory: ctx.workingDirectory, root: ctx.root, homeDir: deps.homeDir })
-  const pathSignal = classifyPaths(paths, ctx.root, candidates)
+  const pathSignal = classifyPaths(paths, ctx.root, last ? [...candidates, last] : candidates)
   if (pathSignal?.kind === 'root') return settled(stay(ctx, 'path', 'in_root'))
   if (pathSignal?.kind === 'target') return settled(judgeHardSignal(ctx, pathSignal.candidate, 'path'))
 
   const named = findNamedCandidates(input.message, candidates)
   if (named.length === 1) return settled(judgeHardSignal(ctx, named[0]!, named[0]!.match))
 
-  // Several folders named: the model picks among them. `stay`/`unclear` are reserved option keys.
-  const options = (named.length > 1 ? named : candidates).filter(option => option.key !== STAY && option.key !== UNCLEAR)
+  // Several folders named: the model picks among them (the last folder is not one of them)
+  const options: CwdCandidate[] = named.length > 1 ? named : last ? [...candidates, last] : candidates
   if (options.length === 0) return settled(stay(ctx, 'model', 'no_answer'))
   const attachments = input.attachments?.map(attachment => (attachment.type ? `${attachment.name} (${attachment.type})` : attachment.name))
   const current = { path: ROOT_LABEL, description: describeFolder(ctx.root, ctx.root) }

@@ -24,6 +24,7 @@ import {
   normalizeFolderListLines,
   parseFolderList,
   parseMiniModelAnswer,
+  pickLastWorkingDirectory,
   readFolderListLines,
   resolveWorkingDirectoryOrigin,
   routeWorkingDirectory,
@@ -86,8 +87,8 @@ describe('cwd router', () => {
   }
 
   const at = (rel = '') => (rel ? join(root, rel) : root)
-  const route = (message: string, from = '', extra: Partial<CwdRouterDeps> = {}, attachments?: { path?: string; name: string; type?: string }[], folders = FOLDERS) =>
-    routeWorkingDirectory({ root, workingDirectory: at(from), message, attachments, sessionId: 's1', folders }, deps(extra))
+  const route = (message: string, from = '', extra: Partial<CwdRouterDeps> = {}, attachments?: { path?: string; name: string; type?: string }[], folders = FOLDERS, lastWorkingDirectory?: string) =>
+    routeWorkingDirectory({ root, workingDirectory: at(from), message, attachments, sessionId: 's1', folders, lastWorkingDirectory }, deps(extra))
   const listed = (lines = FOLDERS) => parseFolderList(lines, root).candidates
 
   beforeEach(() => {
@@ -363,6 +364,82 @@ describe('cwd router', () => {
 
     it('does not run outside the root', async () => {
       expect(await routeWorkingDirectory({ root, workingDirectory: outside, message: 'x', folders: FOLDERS }, deps())).toBeNull()
+    })
+  })
+
+  describe('the last chat\'s folder', () => {
+    const rework = () => at('projects/acme/tasks/rework')
+    const last = (message: string, extra: Partial<CwdRouterDeps> = {}, folder = rework(), from = '') => route(message, from, extra, undefined, FOLDERS, folder)
+    const keysOf = (body: { questions: Record<string, { criteria?: Record<string, unknown> }> }) => Object.keys(body.questions.target!.criteria!)
+
+    it('is the folder of the latest chat inside the root, skipping the root and outside folders', () => {
+      expect(pickLastWorkingDirectory([
+        { workingDirectory: at('projects/acme'), lastActivityAt: 1 },
+        { workingDirectory: root, lastActivityAt: 3 },
+        { workingDirectory: outside, lastActivityAt: 4 },
+        { workingDirectory: undefined, lastActivityAt: 5 },
+        { workingDirectory: rework(), lastActivityAt: 2 },
+      ], root)).toBe(rework())
+      expect(pickLastWorkingDirectory([{ workingDirectory: root, lastActivityAt: 1 }], root)).toBeUndefined()
+      expect(pickLastWorkingDirectory([], root)).toBeUndefined()
+    })
+
+    it('is offered for a follow-up, by its relative path only', async () => {
+      const model = jev({ target: pick('last', 0.8) })
+      expect(await last('continue', { resolveClient: model.resolveClient })).toMatchObject({ action: 'route', target: rework(), to: 'projects/acme/tasks/rework', last: true, reason: 'model', via: 'jev' })
+      const criteria = model.bodies[0]!.questions.target!.criteria!
+      expect(keysOf(model.bodies[0]!)).toEqual(['projects/acme', 'projects/garden', 'content', 'content/drafts', 'last', 'stay', 'unclear'])
+      expect(criteria.last).toContain('projects/acme/tasks/rework — the folder the previous chat worked in')
+      expect(criteria.last).toContain('Rework pricing — Move the pricing endpoint to v2.')
+      expect(JSON.stringify(model.bodies)).not.toContain(root)
+    })
+
+    it('needs 0.7 from the decision model', async () => {
+      expect(await last('continue', { resolveClient: jev({ target: pick('last', 0.6) }).resolveClient })).toMatchObject({ action: 'stay', rule: 'below_threshold', to: 'projects/acme/tasks/rework' })
+    })
+
+    it('is taken when the small model picks it', async () => {
+      const prompts: string[] = []
+      const askMiniModel = async (prompt: string) => { prompts.push(prompt); return 'last' }
+      expect(await last('continue', { resolveClient: off, askMiniModel })).toMatchObject({ action: 'route', target: rework(), last: true, via: 'mini_model' })
+      expect(prompts[0]).toContain('- last: projects/acme/tasks/rework — the folder the previous chat worked in')
+    })
+
+    it('is where a path inside it points', async () => {
+      expect(await last(`fix ${join(rework(), 'notes.md')}`)).toMatchObject({ action: 'route', reason: 'path', target: rework(), last: true })
+    })
+
+    it('keeps a session that sits in it there', async () => {
+      expect(await last('continue', { resolveClient: jev({ target: pick('last', 0.9) }).resolveClient }, rework(), 'projects/acme/tasks/rework')).toMatchObject({ action: 'stay', rule: 'already_there' })
+    })
+
+    it('is not offered at the root, outside it, missing or unusable', async () => {
+      for (const [folder, extra] of [[root, {}], [outside, {}], [at('projects/missing'), {}], [rework(), { isValidDirectory: (path: string) => path !== rework() }]] as const) {
+        const model = jev({ target: pick('stay', 0.9) })
+        await last('continue', { resolveClient: model.resolveClient, ...extra }, folder)
+        expect(keysOf(model.bodies[0]!)).not.toContain('last')
+      }
+    })
+
+    it('is folded into the listed folder it is', async () => {
+      const model = jev({ target: pick('stay', 0.9) })
+      await last('continue', { resolveClient: model.resolveClient }, at('projects/garden'))
+      expect(keysOf(model.bodies[0]!)).not.toContain('last')
+      expect(model.bodies[0]!.questions.target!.criteria!['projects/garden']).toContain('Also the folder the previous chat worked in')
+    })
+
+    it('is not offered when the message names folders, and never matched by name', async () => {
+      const model = jev({ target: pick('projects/garden', 0.6) })
+      await last('acme or garden?', { resolveClient: model.resolveClient })
+      expect(keysOf(model.bodies[0]!)).toEqual(['projects/acme', 'projects/garden', 'stay', 'unclear'])
+      expect(await last('the rework again', { resolveClient: jev({ target: pick('stay', 0.9) }).resolveClient })).toMatchObject({ action: 'stay', reason: 'model' })
+    })
+
+    it('leaves out a listed folder named by the reserved word', async () => {
+      mkdirSync(join(root, 'last'), { recursive: true })
+      const model = jev({ target: pick('stay', 0.9) })
+      await route('continue', '', { resolveClient: model.resolveClient }, undefined, [...FOLDERS, 'last: a folder named last'])
+      expect(keysOf(model.bodies[0]!)).toEqual(['projects/acme', 'projects/garden', 'content', 'content/drafts', 'stay', 'unclear'])
     })
   })
 
