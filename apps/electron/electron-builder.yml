@@ -14,6 +14,12 @@ directories:
 files:
   - dist/**/*
   - "!dist/renderer/src/**"
+  # The build also copies resources/ into dist/resources/; the Pi agent server and
+  # the uv binaries (resources/bin/<platform>-<arch>) ship from resources/ (below),
+  # so skip their dist copies. electron-builder packages what either this list or
+  # the platform `files` list includes: exclude them in both.
+  - "!dist/resources/pi-agent-server/**"
+  - "!dist/resources/bin/*-*/**"
   - "!**/*.map"
   - package.json
   # Include Pi agent server subprocess for Pi SDK sessions
@@ -92,6 +98,9 @@ mac:
     # Crafty (spike) asks a browser for the address of the page you called it from. Under the
     # hardened runtime this also needs the apple-events entitlement (build/entitlements.mac.plist).
     NSAppleEventsUsageDescription: "Crafty reads the address of the page you're on when you call it from a browser."
+    NSDocumentsFolderUsageDescription: "Craft Agents requires access to your Documents folder to read and process your files."
+    NSDesktopFolderUsageDescription: "Craft Agents requires access to your Desktop folder to read and process your files."
+    NSDownloadsFolderUsageDescription: "Craft Agents requires access to your Downloads folder to read and process your files."
   # Apple Silicon only: release.yml dropped Intel builds. build-dmg.sh passes `--${ARCH}`, which
   # overrides this list, so `dist:mac:x64` still builds an Intel app by hand.
   target:
@@ -139,6 +148,9 @@ mac:
   files:
     - "!**/resources/bin/win32-*/**"
     - "!**/resources/bin/linux-*/**"
+    # Skip the dist/resources copies of the Pi agent server and uv (see top-level files)
+    - "!dist/resources/pi-agent-server/**"
+    - "!dist/resources/bin/*-*/**"
   # Use predictable naming for macOS packages (applies to zip; dmg uses its own config below)
   artifactName: "Craft-Agents-${arch}.${ext}"
   # Code signing & notarization (disabled by default for local builds)
@@ -185,6 +197,9 @@ win:
     # See: https://github.com/electron-userland/electron-builder/issues/8250
     - "!vendor/bun/**/*"
     - "!**/resources/bin/win32-x64/**"
+    # Skip the dist/resources copies of the Pi agent server and uv (see top-level files)
+    - "!dist/resources/pi-agent-server/**"
+    - "!dist/resources/bin/*-*/**"
   # Copy executables as extraResources to avoid EBUSY file locking (see comment above)
   extraResources:
     - from: node_modules/@anthropic-ai/claude-agent-sdk
@@ -231,3 +246,6 @@ linux:
   files:
     - "!**/resources/bin/darwin-*/**"
     - "!**/resources/bin/win32-*/**"
+    # Skip the dist/resources copies of the Pi agent server and uv (see top-level files)
+    - "!dist/resources/pi-agent-server/**"
+    - "!dist/resources/bin/*-*/**"
