@@ -36,7 +36,9 @@ Branch: `feature/custom-tweaks`
 
 When you pick a folder in a session, the next new session in that workspace starts in the same folder.
 The reset button sends new sessions back to the workspace's default working directory, and changing that
-default in Workspace Settings clears the remembered folder.
+default in Workspace Settings clears the remembered folder. With auto working directory on in that
+workspace, new chats start in the default working directory instead; tasks, automations and other
+sessions still start in the remembered folder.
 
 Main files: `packages/server-core/src/sessions/working-directory.ts`,
 `packages/server-core/src/sessions/SessionManager.ts`.

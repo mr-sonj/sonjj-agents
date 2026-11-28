@@ -12,6 +12,8 @@ Sonjj Agents is an independent project. It is not affiliated with or endorsed by
 - **Custom skills and sources folders**: a workspace can load them from any folder, for example one
   shared between workspaces or kept in a git repo.
 - **Sessions remember the last working directory** you picked.
+- **Auto working directory**: a new chat's first message moves the session to the project folder it is
+  about, or to a task folder inside it, picked from a list you keep per workspace. Off by default.
 - **`AGENTS.md` from external working directories** is read when a session works outside the
   workspace folder.
 - **Gemini and Vertex AI** accept the tool list.
