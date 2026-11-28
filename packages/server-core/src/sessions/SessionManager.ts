@@ -5,7 +5,7 @@ import { RemoteBrowserPaneManager } from './RemoteBrowserPaneManager'
 import { validateFilePath, getWorkspaceAllowedDirs } from '@craft-agent/server-core/handlers'
 import { createScopedLogger, CONSOLE_LOGGER, type PlatformServices, type Logger } from '@craft-agent/server-core/runtime'
 import { basename, dirname, join } from 'path'
-import { existsSync } from 'fs'
+import { existsSync, rmSync } from 'fs'
 import { readFile, writeFile, mkdir } from 'fs/promises'
 import { createHash, randomUUID } from 'node:crypto'
 import { type AgentEvent, type ChatOptions, getPermissionMode, setPermissionMode, setGuardedModeActiveResolver, clampPermissionMode, planExecutionMode, parsePermissionMode, hydratePreviousPermissionMode, getPermissionModeDiagnostics, type PermissionMode, unregisterSessionScopedToolCallbacks, mergeSessionScopedToolCallbacks, AbortReason, type AuthRequest, type AuthResult, type CredentialAuthRequest, type BrowserPaneFns, generateConversationSummary, resolveKeepBackgroundTasksAlive } from '@craft-agent/shared/agent'
@@ -119,6 +119,8 @@ import { buildGuardedModeCheck } from '../decisions/guarded-mode'
 import { buildSubagentModelPicker } from '../decisions/subagent-models'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
+import { describeRoute, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
+import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
 import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
 import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labels/crud'
@@ -817,6 +819,9 @@ interface ManagedSession {
   // SDK cwd for session storage - set once at creation, never changes.
   // Ensures SDK can find session transcripts regardless of workingDirectory changes.
   sdkCwd?: string
+  // Where workingDirectory came from: the first message may replace it only when 'default' or
+  // 'inherited' (workspace switch `autoWorkingDirectory`). Absent in older sessions: treated as 'explicit'.
+  workingDirectoryOrigin?: WorkingDirectoryOrigin
   // Shared viewer URL (if shared via viewer)
   sharedUrl?: string
   // Shared session ID in viewer (for revoke)
@@ -3480,6 +3485,15 @@ export class SessionManager implements ISessionManager {
       }
     }
 
+    // Where the folder came from. Compared with the configured project folder rather than
+    // `userDefaultWorkingDir`, so a folder remembered from an earlier session counts as inherited.
+    const workingDirectoryOrigin = resolveWorkingDirectoryOrigin({
+      requested: options?.workingDirectory,
+      resolved: resolvedWorkingDir,
+      configuredDefault: wsConfig?.defaults?.workingDirectory || undefined,
+      boundElsewhere: !!resolvedProjectId || !!options?.parentSessionId || !!options?.branchFromSessionId,
+    })
+
     // Validate branch request up-front so branch metadata is only set for valid branches.
     // This prevents creating sessions that claim to be branched but don't have copied history.
     // A branch keeps its parent's coding mode: an SDK fork carries the parent's pinned system prompt.
@@ -3677,6 +3691,7 @@ export class SessionManager implements ISessionManager {
       name: options?.name,
       permissionMode: defaultPermissionMode,
       workingDirectory: resolvedWorkingDir,
+      workingDirectoryOrigin,
       hidden: options?.hidden,
       sessionStatus: options?.sessionStatus,
       // Automations, spawn_session and task flows hand in labels unvalidated: store them canonical
@@ -6384,6 +6399,7 @@ export class SessionManager implements ISessionManager {
       }
 
       managed.workingDirectory = path
+      managed.workingDirectoryOrigin = 'user'
 
       // Invalidate filesystem caches that depend on working directory
       invalidateContextFileCache(path)
@@ -6424,6 +6440,108 @@ export class SessionManager implements ISessionManager {
         saveWorkspaceConfig(managed.workspace.rootPath, wsConfig)
       }
     }
+  }
+
+  /**
+   * Whether this message may pick the session's folder (workspace switch `autoWorkingDirectory`): the first
+   * user message of an interactive session with no agent yet, still in the workspace's default
+   * folder (or one remembered from an earlier session), and not a slash command.
+   */
+  private shouldAutoRouteWorkingDirectory(
+    managed: ManagedSession,
+    message: string,
+    options: SendMessageOptions | undefined,
+    turn: { activationResend: boolean; authRetry?: boolean },
+  ): boolean {
+    if (managed.agent || managed.sdkSessionId || !managed.workingDirectory) return false
+    if (turn.activationResend || turn.authRetry || options?.hidden || managed.hidden || managed.systemPromptPreset === 'mini') return false
+    if (managed.taskSlug || managed.taskRunId || managed.taskNodeId || managed.taskDraft || managed.unattended
+      || managed.parentSessionId || managed.triggeredBy || managed.branchFromMessageId) return false
+    const origin = managed.workingDirectoryOrigin ?? 'explicit'
+    if (origin !== 'default' && origin !== 'inherited') return false
+    if (message.trim().startsWith('/')) return false
+    if (managed.messages.filter(m => m.role === 'user').length !== 1) return false
+    // Read last: only a session's first message gets here. Works with or without the decision model.
+    return loadWorkspaceConfig(managed.workspace.rootPath)?.autoWorkingDirectory === true
+  }
+
+  /** Ask the cwd router and apply its route. Never throws: on any failure the session keeps its folder. */
+  private async autoRouteWorkingDirectory(managed: ManagedSession, message: string, attachments?: FileAttachment[]): Promise<void> {
+    const from = managed.workingDirectory
+    try {
+      const config = loadWorkspaceConfig(managed.workspace.rootPath)
+      const root = config?.defaults?.workingDirectory
+      // Only the folders the workspace lists can be picked (an agent may have written it by hand)
+      const folders = readFolderListLines(config?.autoWorkingDirectoryFolders)
+      if (!root || !from || !folders.length) return
+      const route = await routeWorkingDirectory(
+        { root, workingDirectory: from, message, attachments, sessionId: managed.id, folders },
+        {
+          log: line => sessionLog.info(line),
+          // Without the decision model: the small model of the connection this session will use
+          askMiniModel: (prompt, signal) => this.askAutoWorkingDirectoryModel(managed, prompt, signal),
+        },
+      )
+      if (!route) return
+      sessionLog.info(`[auto-working-directory] Session ${managed.id}: ${route.action} (${route.reason}${route.via ? ` via ${route.via}` : ''}${route.rule ? `, ${route.rule}` : ''}) from ${route.from}${route.to ? ` to ${route.to}` : ''}`)
+      if (route.action !== 'route' || !route.target) return
+      // Deleted, or the user picked a folder while the router ran: nothing to move, or theirs stands
+      if (this.sessions.get(managed.id) !== managed || managed.workingDirectory !== from || managed.workingDirectoryOrigin === 'user') return
+      this.applyAutoWorkingDirectory(managed, route.target, route)
+    } catch (error) {
+      sessionLog.warn(`[auto-working-directory] Session ${managed.id}: router failed, keeping ${from}:`, error)
+    }
+  }
+
+  /**
+   * The router's small model: one completion on a throwaway agent of the connection the session
+   * will use (as for handoff summaries). It is destroyed as soon as the router stops waiting, and
+   * again once the call settles: a Pi subprocess spawned after the first destroy must not outlive
+   * it. `null` without credentials: never the CLI's own login.
+   */
+  private async askAutoWorkingDirectoryModel(managed: ManagedSession, prompt: string, signal: AbortSignal): Promise<string | null> {
+    const id = `${managed.id}-auto-working-directory`
+    const agent = this.createUtilityAgent(managed.workspace, { id, llmConnection: managed.llmConnection, model: managed.model })
+    const destroyOnAbort = () => agent.destroy()
+    signal.addEventListener('abort', destroyOnAbort, { once: true })
+    try {
+      const { authInjected, authWarning } = await agent.postInit()
+      if (!authInjected) {
+        sessionLog.warn(`[auto-working-directory] Session ${managed.id}: no small model: ${authWarning ?? 'no credentials'}`)
+        return null
+      }
+      if (signal.aborted) return null
+      return await agent.runMiniCompletion(prompt)
+    } finally {
+      signal.removeEventListener('abort', destroyOnAbort)
+      agent.destroy()
+      // A Pi utility agent leaves an empty `.pi-agent` folder under its own session path
+      try {
+        rmSync(getSessionStoragePath(managed.workspace.rootPath, id), { recursive: true, force: true })
+      } catch (error) {
+        sessionLog.warn(`[auto-working-directory] Session ${managed.id}: could not remove ${id}:`, error)
+      }
+    }
+  }
+
+  /**
+   * Move a session that has no agent yet to the folder the router picked: as if the user had
+   * picked it before the first message (sdkCwd follows, caches are dropped, the folder chip
+   * updates), except that it is never remembered as the folder for later sessions.
+   */
+  private applyAutoWorkingDirectory(managed: ManagedSession, path: string, route: CwdRoute): void {
+    if (managed.agent || managed.sdkSessionId) return
+    managed.workingDirectory = path
+    managed.sdkCwd = path
+    managed.workingDirectoryOrigin = 'auto'
+    invalidateContextFileCache(path)
+    invalidateSkillsCache()
+    const notice: Message = { id: generateMessageId(), role: 'info', content: describeRoute(route), timestamp: this.monotonic() }
+    managed.messages.push(notice)
+    this.persistSession(managed)
+    sessionLog.info(`[auto-working-directory] Session ${managed.id}: working directory and sdkCwd now ${path}`)
+    this.sendEvent({ type: 'working_directory_changed', sessionId: managed.id, workingDirectory: path }, managed.workspace.id)
+    this.sendEvent({ type: 'info', sessionId: managed.id, message: notice.content, level: 'info', timestamp: notice.timestamp }, managed.workspace.id)
   }
 
   /**
@@ -7230,6 +7348,13 @@ export class SessionManager implements ISessionManager {
     // Acking only here means a caller resolved by the ack never finds the session idle.
     endAdmission()
     onAck?.(userMessage.id, 'started')
+
+    // Auto working directory: the first message may move a session still in the workspace's default
+    // folder to the project it is about, before anything below reads the folder (skill sources,
+    // suggestions, the agent's system prompt and shell).
+    if (this.shouldAutoRouteWorkingDirectory(managed, message, options, { activationResend, authRetry: _isAuthRetry })) {
+      await this.autoRouteWorkingDirectory(managed, message, attachments)
+    }
 
     // Pre-enable sources required by invoked skills (Issue #249)
     // This eliminates the two-turn penalty where the agent discovers missing sources at runtime.

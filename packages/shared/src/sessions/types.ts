@@ -35,6 +35,8 @@ export const SESSION_PERSISTENT_FIELDS = [
   'lastReadMessageId', 'hasUnread',
   // Config
   'enabledSourceSlugs', 'permissionMode', 'previousPermissionMode', 'workingDirectory',
+  // Where the working directory came from (decides whether the first message may pick the folder)
+  'workingDirectoryOrigin',
   // Model/Connection
   'model', 'llmConnection', 'connectionLocked', 'thinkingLevel',
   // Coding mode (lean coding prompt + tool profile; fixed once the session has messages)
@@ -75,6 +77,19 @@ export const SESSION_PERSISTENT_FIELDS = [
 ] as const;
 
 export type SessionPersistentField = typeof SESSION_PERSISTENT_FIELDS[number];
+
+/**
+ * Where a session's working directory came from:
+ * - `explicit`: the caller named it (a path, a project's folder, a parent or branch session)
+ * - `user`: picked or reset in the chat's folder picker
+ * - `inherited`: the workspace default resolved to a folder other than `defaults.workingDirectory`
+ *   (one remembered from an earlier session)
+ * - `default`: the workspace's `defaults.workingDirectory`
+ * - `auto`: picked from the first message by the decision model (toggle `autoWorkingDirectory`)
+ *
+ * Sessions saved without it count as `explicit`.
+ */
+export type WorkingDirectoryOrigin = 'explicit' | 'user' | 'inherited' | 'default' | 'auto';
 
 /**
  * Session status (user-controlled, never automatic)
@@ -156,6 +171,8 @@ export interface SessionConfig {
   workingDirectory?: string;
   /** SDK cwd for session storage - set once at creation, never changes. Ensures SDK can find session transcripts regardless of workingDirectory changes. */
   sdkCwd?: string;
+  /** Where `workingDirectory` came from (absent in older sessions: treat as `explicit`) */
+  workingDirectoryOrigin?: WorkingDirectoryOrigin;
   /** Shared viewer URL (if shared via viewer) */
   sharedUrl?: string;
   /** Shared session ID in viewer (for revoke) */
@@ -304,6 +321,8 @@ export interface SessionHeader {
   workingDirectory?: string;
   /** SDK cwd for session storage - set once at creation, never changes */
   sdkCwd?: string;
+  /** Where `workingDirectory` came from (absent in older sessions: treat as `explicit`) */
+  workingDirectoryOrigin?: WorkingDirectoryOrigin;
   /** Shared viewer URL (if shared via viewer) */
   sharedUrl?: string;
   /** Shared session ID in viewer (for revoke) */
@@ -425,6 +444,8 @@ export interface SessionMetadata {
   workingDirectory?: string;
   /** SDK cwd for session storage - set once at creation, never changes */
   sdkCwd?: string;
+  /** Where `workingDirectory` came from (absent in older sessions: treat as `explicit`) */
+  workingDirectoryOrigin?: WorkingDirectoryOrigin;
   /** Role/type of the last message (for badge display without loading messages) */
   lastMessageRole?: 'user' | 'assistant' | 'plan' | 'tool' | 'error';
   /** Model to use for this session (overrides global config if set) */

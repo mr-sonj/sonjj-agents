@@ -121,6 +121,7 @@ export const DOC_REFS = {
   llmTool: `${APP_ROOT}/docs/llm-tool.md`,
   browserTools: `${APP_ROOT}/docs/browser-tools.md`,
   decisions: `${APP_ROOT}/docs/decisions.md`,
+  autoWorkingDirectory: `${APP_ROOT}/docs/auto-working-directory.md`,
   craftCli: `${APP_ROOT}/docs/craft-cli.md`,
   docsDir: `${APP_ROOT}/docs/`,
 } as const;
