@@ -1,0 +1,914 @@
+/**
+ * Auto working directory (the workspace switch `autoWorkingDirectory` in its config.json).
+ *
+ * On a session's first message, before its agent exists, pick the project folder the message is
+ * about, so the system prompt's project context files and the shell start there exactly as if
+ * the user had picked the folder. It always picks from the root, wherever the session sits (a
+ * folder remembered from an earlier session is not a default), and the root is the default:
+ * without a clear signal, or without an answer, the session works in the root.
+ *
+ * The only folders it may move to are those the workspace lists (`autoWorkingDirectoryFolders`,
+ * paths relative to the context root, the workspace's `defaults.workingDirectory`), each with a
+ * note on when to pick it; a listed folder's AGENTS.md/CLAUDE.md adds to that note. Hard signals
+ * are checked first: a path in the message or an attachment, then a listed folder's name in the
+ * message (words in the notes are never hard signals). A model is asked only when they do not
+ * settle it: the decision model (Jev) when the decision layer is on (which folder is the message
+ * about), else the session connection's small model (`askMiniModel`), which answers with one
+ * folder key and no confidence. Only paths relative to the root reach either provider.
+ *
+ * SessionManager decides when this runs and applies the result; apart from reading the listed
+ * folders this module has no side effects.
+ */
+
+import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
+import { homedir } from 'node:os'
+import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
+import type { DecisionRequest, DecisionResult } from '@craft-agent/shared/decisions'
+import type { AutoWorkingDirectoryIssue, CreateSessionOptions } from '@craft-agent/shared/protocol'
+import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
+import { isValidWorkingDirectory } from '../utils/path-validation'
+import { FOREGROUND_MAX_DEADLINE_MS, openDecisionPoint, recordDecisionOutcome, type DecisionPointDeps } from './decision-point'
+
+/** The decision model's pick needs this much confidence without a hard signal. */
+export const ROUTE_FROM_ROOT_AT = 0.7
+/** Below this the model's pick never moves the session. */
+export const MIN_TARGET_CONFIDENCE = 0.5
+
+/** Folders of the list used at most (the model takes up to 255 options). */
+export const MAX_CANDIDATES = 200
+/** Folder names shorter than this are not matched in the message. */
+export const MIN_NAME_LENGTH = 4
+/** Message characters sent to the model. */
+export const MESSAGE_MAX_CHARS = 2_000
+/** Characters of a folder's context-file description sent to the model. */
+export const DESCRIPTION_MAX_CHARS = 200
+/** Characters of a folder's note in the list sent to the model. */
+export const NOTE_MAX_CHARS = 400
+/** Words of a task folder's name the message must contain to go into it from its project. */
+export const MIN_TASK_NAME_WORDS = 2
+/** Shorter words of a folder name or message are not counted. */
+export const MIN_TASK_WORD_LENGTH = 3
+/** Entries of a project folder looked at for task folders. */
+export const MAX_TASK_FOLDERS = 500
+/** The longest wait for the small model's pick (a Claude connection starts a CLI process per call). */
+export const MINI_MODEL_DEADLINE_MS = 8_000
+
+/** Bytes read from a context file for its description. */
+const CONTEXT_FILE_READ_BYTES = 16 * 1024
+/** Context files, in priority order, matched case-insensitively. */
+const CONTEXT_FILE_NAMES = ['agents.md', 'claude.md']
+const DESCRIPTION_FIELDS = ['project_role', 'description', 'title']
+
+const STAY = 'stay'
+const UNCLEAR = 'unclear'
+/** The option for the folder the latest chat worked in. */
+export const LAST = 'last'
+/** Option keys a listed folder may not have. */
+const RESERVED_KEYS = new Set([STAY, UNCLEAR, LAST])
+const ROOT_LABEL = '(root)'
+
+const TARGET_INSTRUCTIONS = 'Which project folder is this message about?'
+const STAY_CRITERION = 'Not clearly about any listed folder, or about the current one'
+const UNCLEAR_CRITERION = 'Cannot tell'
+const LAST_CRITERION = 'the folder the previous chat worked in. Pick it only when the message continues earlier work ("continue", "keep going", "làm tiếp", "tiếp tục"), not for a new topic.'
+const LAST_LISTED_NOTE = 'Also the folder the previous chat worked in: pick it for a follow-up like "continue".'
+
+export interface CwdCandidate {
+  /** Path below the root with `/` separators, e.g. `projects/acme`: the option key sent to the model. */
+  key: string
+  /** Absolute path below the root. */
+  path: string
+  description: string
+  /** Other names for the folder, written in parentheses after its path (NFC). */
+  aliases: string[]
+}
+
+/** How a message names a candidate: its folder name, or one of its aliases. */
+export type CwdNameMatch = 'name' | 'alias'
+
+/** A candidate the message names. */
+export interface NamedCandidate extends CwdCandidate {
+  match: CwdNameMatch
+}
+
+/** Why no listed folder was picked (the session works in the root), or why it stays where it is. */
+export type CwdStayRule =
+  | 'in_root'         // the paths in the message are in the root, outside every listed folder
+  | 'no_answer'       // no (usable) answer from the model
+  | 'stay_or_unclear' // the model picked `stay` or `unclear`
+  | 'low_confidence'  // the pick is below MIN_TARGET_CONFIDENCE
+  | 'below_threshold' // the pick is below ROUTE_FROM_ROOT_AT
+  | 'invalid_target'  // the target is not a usable directory
+  | 'already_there'   // the session is in the picked folder already
+
+export interface CwdRoute {
+  /**
+   * `route`: move the session to `target`, a folder other than the one it is in. That is the root
+   * when nothing is picked for a session sitting in a remembered folder (`rule` says why).
+   */
+  action: 'stay' | 'route'
+  /** Absolute folder to switch to (routes only). */
+  target?: string
+  /** What decided: a path, a folder name, one of its aliases, or the model alone. */
+  reason: 'path' | CwdNameMatch | 'model'
+  /** The model's confidence in its pick, when it was asked. */
+  confidence?: number
+  /** The session's folder below the root (`(root)` for the root itself). */
+  from: string
+  /** The picked folder below the root (`(root)` when moving back to it), also when a rule kept the session where it is. */
+  to?: string
+  rule?: CwdStayRule
+  /** Which model was asked: the decision model or the connection's small model. */
+  via?: 'jev' | 'mini_model'
+  /** The target is the folder the latest chat worked in (option `last`). */
+  last?: true
+  /** The target is a task folder of the picked project, named in the message (path below the root). */
+  task?: string
+}
+
+export interface CwdRouterInput {
+  /** Context root: the workspace's `defaults.workingDirectory`. */
+  root: string
+  /** The session's folder now: the root, or a folder remembered from an earlier session (never a default). */
+  workingDirectory: string
+  message: string
+  attachments?: readonly { path?: string; name: string; type?: string }[]
+  sessionId?: string
+  /** The workspace's folder list (`autoWorkingDirectoryFolders`, see `parseFolderList`). */
+  folders: readonly string[] | undefined
+  /** The folder the latest chat worked in (see `pickLastWorkingDirectory`): offered for a follow-up. */
+  lastWorkingDirectory?: string
+}
+
+export interface CwdRouterDeps extends DecisionPointDeps {
+  /** Checked before a move (default: `isValidWorkingDirectory`). */
+  isValidDirectory?: (path: string) => boolean
+  /** Expands `~` in paths (default: the user's home). */
+  homeDir?: string
+  /**
+   * The session connection's small model, asked when the decision model is off or unavailable:
+   * the prompt in, its reply out (`null` for none). Without it the router stays put then.
+   * `signal` aborts when the router stops waiting.
+   */
+  askMiniModel?: (prompt: string, signal: AbortSignal) => Promise<string | null>
+  /** How long to wait for `askMiniModel` (default `MINI_MODEL_DEADLINE_MS`). */
+  miniModelDeadlineMs?: number
+}
+
+// ── Paths ───────────────────────────────────────────────────────────────
+
+/** `child` is `parent` or below it. */
+export function isWithin(parent: string, child: string): boolean {
+  const rel = relative(parent, child)
+  return rel === '' || (rel !== '..' && !rel.startsWith(`..${sep}`) && !isAbsolute(rel))
+}
+
+/** Both set and naming the same folder (trailing separators and `.` segments ignored). */
+export function isSameDirectory(a: string | undefined, b: string | undefined): boolean {
+  return !!a && !!b && resolve(a) === resolve(b)
+}
+
+function keyOf(root: string, path: string): string {
+  return relative(root, path).split(sep).join('/')
+}
+
+/**
+ * Where a new session's working directory comes from (see `WorkingDirectoryOrigin`).
+ * `requested` is `CreateSessionOptions.workingDirectory`.
+ */
+export function resolveWorkingDirectoryOrigin(input: {
+  requested: string | undefined
+  resolved: string | undefined
+  configuredDefault: string | undefined
+  /** Bound to a project, or a subtask or branch of another session. */
+  boundElsewhere: boolean
+}): WorkingDirectoryOrigin {
+  if (input.boundElsewhere) return 'explicit'
+  if (input.requested !== undefined && input.requested !== 'user_default') return 'explicit'
+  if (!input.resolved && !input.configuredDefault) return 'default'
+  return isSameDirectory(input.resolved, input.configuredDefault) ? 'default' : 'inherited'
+}
+
+/**
+ * A session a client asks for that is a plain chat, so it starts at the root when the switch is
+ * on: no folder given, no task, subtask, branch or project, not hidden, unattended or mini.
+ */
+export function isPlainChatRequest(options: CreateSessionOptions | undefined): boolean {
+  if (!options) return true
+  if (options.workingDirectory !== undefined && options.workingDirectory !== 'user_default') return false
+  if (options.hidden || options.unattended || options.systemPromptPreset === 'mini') return false
+  if (options.taskSlug || options.taskRunId || options.taskNodeId || options.taskDraft || options.applyTaskLabel) return false
+  return !(options.parentSessionId || options.branchFromSessionId || options.branchFromMessageId || options.projectId)
+}
+
+/** The workspace switch is on and there is something to pick: a root and at least one line in the list. */
+export function isAutoWorkingDirectoryOn(config: { autoWorkingDirectory?: unknown; autoWorkingDirectoryFolders?: unknown; defaults?: { workingDirectory?: string } } | null | undefined): boolean {
+  return config?.autoWorkingDirectory === true && !!config.defaults?.workingDirectory && readFolderListLines(config.autoWorkingDirectoryFolders).length > 0
+}
+
+// ── Candidates ──────────────────────────────────────────────────────────
+
+function readEntries(dir: string): Dirent[] {
+  try {
+    return readdirSync(dir, { withFileTypes: true })
+  } catch {
+    return []
+  }
+}
+
+function contextFileIn(entries: readonly Dirent[]): string | null {
+  for (const wanted of CONTEXT_FILE_NAMES) {
+    const entry = entries.find(e => e.name.toLowerCase() === wanted && !e.isDirectory())
+    if (entry) return entry.name
+  }
+  return null
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory()
+  } catch {
+    return false
+  }
+}
+
+/** A line of the folder list that is not used, and why. */
+export type FolderListIssue = AutoWorkingDirectoryIssue
+
+/**
+ * The folder list as stored: a string (split into lines) or an array of strings, without
+ * trailing spaces or trailing blank lines. Throws on anything else.
+ */
+export function normalizeFolderListLines(value: unknown): string[] {
+  if (value === undefined || value === null) return []
+  const lines = typeof value === 'string' ? value.split(/\r?\n/) : value
+  if (!Array.isArray(lines) || !lines.every(line => typeof line === 'string')) {
+    throw new Error('autoWorkingDirectoryFolders must be a list of lines')
+  }
+  const trimmed = (lines as string[]).flatMap(line => line.split(/\r?\n/)).map(line => line.trimEnd())
+  while (trimmed.length > 0 && trimmed[trimmed.length - 1] === '') trimmed.pop()
+  return trimmed
+}
+
+/**
+ * The folder list as found in config.json, never throwing: like `normalizeFolderListLines`, but an
+ * entry that is not a string (a hand edit such as `{ "path": … }`) becomes its JSON text, so it is
+ * reported as a line naming no folder instead of breaking the settings page or the router.
+ */
+export function readFolderListLines(value: unknown): string[] {
+  const asLine = (entry: unknown) => (typeof entry === 'string' ? entry : JSON.stringify(entry) ?? String(entry))
+  if (value === undefined || value === null) return []
+  return normalizeFolderListLines(Array.isArray(value) ? value.map(asLine) : typeof value === 'string' ? value : [asLine(value)])
+}
+
+/** A listed folder's note, its aliases, then what its AGENTS.md/CLAUDE.md says, when it has one. */
+function describeListedFolder(path: string, note: string, aliases: readonly string[]): string {
+  const file = contextFileIn(readEntries(path))
+  const fromFile = file ? describeContextFileAt(join(path, file)) : ''
+  const own = [clip(note, NOTE_MAX_CHARS), aliases.length ? `(aliases: ${aliases.join(', ')})` : ''].filter(Boolean).join(' ')
+  return own && fromFile ? `${own} (${fromFile})` : own || fromFile
+}
+
+/** `path (alias, alias)` → the path and its aliases (trimmed, NFC, without blanks or repeats in any case). */
+function splitAliases(head: string): { written: string; aliases: string[] } {
+  const match = /^(.*?)\s*\(([^()]*)\)$/.exec(head)
+  if (!match) return { written: head, aliases: [] }
+  const aliases: string[] = []
+  for (const raw of match[2]!.split(',')) {
+    const alias = raw.trim().normalize('NFC')
+    if (alias && !aliases.some(seen => seen.toLocaleLowerCase() === alias.toLocaleLowerCase())) aliases.push(alias)
+  }
+  return { written: match[1]!.trim(), aliases }
+}
+
+/**
+ * The workspace's folder list (`autoWorkingDirectoryFolders`): the only folders the router may
+ * move a session to. One line per folder, `<path relative to the root>: <when to pick it>`;
+ * blank lines and lines starting with `#` are skipped, and a folder name may not contain `:`.
+ * Aliases go in parentheses after the path: `<path> (<alias>, <alias>): <note>`.
+ * Lines naming no folder below the root are reported as issues and skipped. `describe: false`
+ * only checks the lines (no context files are read).
+ */
+export function parseFolderList(
+  lines: readonly string[] | undefined,
+  root: string,
+  options: { describe?: boolean } = {},
+): { candidates: CwdCandidate[]; issues: FolderListIssue[] } {
+  const rootPath = resolve(root)
+  const candidates: CwdCandidate[] = []
+  const issues: FolderListIssue[] = []
+  const seen = new Set<string>()
+  ;(lines ?? []).forEach((raw, index) => {
+    const text = raw.trim()
+    if (!text || text.startsWith('#')) return
+    const colon = text.indexOf(':')
+    const { written, aliases } = splitAliases((colon >= 0 ? text.slice(0, colon) : text).trim())
+    const note = colon >= 0 ? text.slice(colon + 1).trim() : ''
+    const rel = written.replace(/^\.[\\/]+/, '').replace(/[\\/]+$/, '')
+    const line = index + 1
+    if (!rel) return void issues.push({ line, path: written, kind: 'no_path' })
+    const path = resolve(rootPath, rel)
+    if (isAbsolute(rel) || rel.startsWith('~') || path === rootPath || !isWithin(rootPath, path)) {
+      return void issues.push({ line, path: written, kind: 'outside_root' })
+    }
+    const key = keyOf(rootPath, path)
+    if (seen.has(key)) return void issues.push({ line, path: written, kind: 'duplicate' })
+    seen.add(key)
+    if (!isDirectory(path)) return void issues.push({ line, path: written, kind: 'missing' })
+    if (candidates.length >= MAX_CANDIDATES) return void issues.push({ line, path: written, kind: 'too_many' })
+    candidates.push({ key, path, aliases, description: options.describe === false ? note : describeListedFolder(path, note, aliases) })
+  })
+  return { candidates, issues }
+}
+
+/**
+ * The folder the latest chat worked in: of `sessions` (the host's chats, already filtered), the
+ * one with the latest activity whose folder is inside the root and not the root itself.
+ */
+export function pickLastWorkingDirectory(
+  sessions: readonly { workingDirectory?: string; lastActivityAt: number }[],
+  root: string,
+): string | undefined {
+  let latest: { workingDirectory?: string; lastActivityAt: number } | undefined
+  for (const session of sessions) {
+    if (!session.workingDirectory || isSameDirectory(session.workingDirectory, root) || !isWithin(resolve(root), resolve(session.workingDirectory))) continue
+    if (!latest || session.lastActivityAt > latest.lastActivityAt) latest = session
+  }
+  return latest?.workingDirectory
+}
+
+/**
+ * The `last` option for `folder`, or `null` when it is not usable (missing, the root, outside it,
+ * rejected by `isValid`). When it is a listed folder, that folder's description says so instead and
+ * `candidates` comes back with the note added.
+ */
+function lastOption(
+  folder: string | undefined,
+  root: string,
+  candidates: CwdCandidate[],
+  isValid: (path: string) => boolean,
+): { option: CwdCandidate | null; candidates: CwdCandidate[] } {
+  const none = { option: null, candidates }
+  if (!folder) return none
+  const path = resolve(folder)
+  if (path === root || !isWithin(root, path) || !isDirectory(path) || !isValid(path)) return none
+  if (candidates.some(candidate => candidate.path === path)) {
+    return {
+      option: null,
+      candidates: candidates.map(candidate => (candidate.path === path ? { ...candidate, description: [candidate.description, LAST_LISTED_NOTE].filter(Boolean).join(' ') } : candidate)),
+    }
+  }
+  const fromFile = describeFolder(path, root)
+  const description = `${keyOf(root, path)} — ${LAST_CRITERION}${fromFile ? ` (${fromFile})` : ''}`
+  return { option: { key: LAST, path, description, aliases: [] }, candidates }
+}
+
+/** The deepest candidate that is `path` or contains it. */
+export function deepestContaining(candidates: readonly CwdCandidate[], path: string): CwdCandidate | null {
+  let best: CwdCandidate | null = null
+  for (const candidate of candidates) {
+    if (isWithin(candidate.path, path) && (!best || candidate.path.length > best.path.length)) best = candidate
+  }
+  return best
+}
+
+// ── Descriptions ────────────────────────────────────────────────────────
+
+function clip(text: string, max = DESCRIPTION_MAX_CHARS): string {
+  const flat = text.replace(/\s+/g, ' ').trim()
+  return flat.length > max ? `${flat.slice(0, max - 1).trimEnd()}…` : flat
+}
+
+function unquote(value: string): string {
+  const v = value.trim()
+  if (v.length >= 2 && ((v.startsWith('"') && v.endsWith('"')) || (v.startsWith("'") && v.endsWith("'")))) return v.slice(1, -1)
+  return v
+}
+
+/** Top-level scalar fields of a leading `---` frontmatter block (block scalars folded), and the body after it. */
+export function splitFrontmatter(content: string): { fields: Record<string, string>; body: string } {
+  const lines = content.replace(/^\uFEFF/, '').split(/\r?\n/)
+  if (lines[0]?.trim() !== '---') return { fields: {}, body: content }
+  const end = lines.findIndex((line, i) => i > 0 && (line.trim() === '---' || line.trim() === '...'))
+  if (end < 0) return { fields: {}, body: content }
+  const fields: Record<string, string> = {}
+  let i = 1
+  while (i < end) {
+    const match = /^([A-Za-z_][\w-]*)\s*:(.*)$/.exec(lines[i]!)
+    i++
+    if (!match) continue
+    const key = match[1]!
+    let value = match[2]!.trim()
+    if (value === '' || /^[>|][+-]?$/.test(value)) {
+      // A block scalar or a plain scalar continued on indented lines
+      const parts: string[] = []
+      while (i < end && (/^\s+\S/.test(lines[i]!) || lines[i]!.trim() === '')) {
+        if (!/^\s*-\s/.test(lines[i]!)) parts.push(lines[i]!.trim())
+        i++
+      }
+      value = parts.join(' ')
+    }
+    fields[key] = unquote(value)
+  }
+  return { fields, body: lines.slice(end + 1).join('\n') }
+}
+
+function stripInlineMarkdown(text: string): string {
+  return text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, '$1')
+    .replace(/[*_`~]+/g, '')
+    .trim()
+}
+
+/** The first H1 and the paragraph after it (or the first paragraph when there is no H1). */
+function headingAndFirstParagraph(body: string): string {
+  const lines = body.split(/\r?\n/)
+  let i = 0
+  let inFence = false
+  let heading = ''
+  const headingAt = lines.findIndex(line => /^#\s+\S/.test(line))
+  if (headingAt >= 0) {
+    heading = stripInlineMarkdown(lines[headingAt]!.replace(/^#\s+/, ''))
+    i = headingAt + 1
+  }
+  const paragraph: string[] = []
+  for (; i < lines.length; i++) {
+    const line = lines[i]!.trim()
+    if (line.startsWith('```') || line.startsWith('~~~')) {
+      if (paragraph.length > 0) break
+      inFence = !inFence
+      continue
+    }
+    if (inFence) continue
+    if (!line || line.startsWith('#') || line.startsWith('|') || line.startsWith('<!--')) {
+      if (paragraph.length > 0) break
+      continue
+    }
+    paragraph.push(stripInlineMarkdown(line.replace(/^>\s?/, '')))
+  }
+  const text = paragraph.join(' ')
+  return heading && text ? `${heading} — ${text}` : heading || text
+}
+
+/** One-line description of a context file's content: frontmatter `project_role` → `description` → `title`, else its H1 and first paragraph. */
+export function describeContextFile(content: string): string {
+  const { fields, body } = splitFrontmatter(content)
+  for (const field of DESCRIPTION_FIELDS) {
+    const value = fields[field]?.trim()
+    if (value) return clip(value)
+  }
+  return clip(headingAndFirstParagraph(body))
+}
+
+function describeContextFileAt(file: string): string {
+  try {
+    const content = readFileSync(file, 'utf-8')
+    return describeContextFile(content.length > CONTEXT_FILE_READ_BYTES ? content.slice(0, CONTEXT_FILE_READ_BYTES) : content)
+  } catch {
+    return ''
+  }
+}
+
+/** Description of `folder` from the nearest context file on the way up to `root` (a task folder without one gets its project's). */
+export function describeFolder(folder: string, root: string): string {
+  let dir = resolve(folder)
+  const top = resolve(root)
+  for (;;) {
+    const file = contextFileIn(readEntries(dir))
+    if (file) return describeContextFileAt(join(dir, file))
+    if (dir === top || !isWithin(top, dir)) return ''
+    const parent = dirname(dir)
+    if (parent === dir) return ''
+    dir = parent
+  }
+}
+
+// ── Hard signals ────────────────────────────────────────────────────────
+
+const TRAILING_PUNCTUATION = /[.,;:!?'"`]+$/
+
+/**
+ * Absolute paths the message refers to: `[file:…]`/`[folder:…]` mentions (relative ones are in
+ * the working directory), resolved `[Mentioned file: … (at …)]` markers, `@path` mentions
+ * (relative ones must exist in the working directory or the root), absolute or `~/` paths in the
+ * text, and attachment paths.
+ */
+export function collectMessagePaths(
+  message: string,
+  attachments: readonly { path?: string }[] | undefined,
+  base: { workingDirectory: string; root: string; homeDir?: string; exists?: (path: string) => boolean },
+): string[] {
+  const home = base.homeDir ?? homedir()
+  const exists = base.exists ?? ((path: string) => {
+    try {
+      statSync(path)
+      return true
+    } catch {
+      return false
+    }
+  })
+  const expand = (raw: string): string | null => {
+    const path = raw.trim().replace(TRAILING_PUNCTUATION, '')
+    if (!path) return null
+    if (path === '~' || path.startsWith('~/')) return resolve(home, path.slice(2))
+    return isAbsolute(path) ? resolve(path) : null
+  }
+  const paths = new Set<string>()
+  const add = (path: string | null) => { if (path) paths.add(path) }
+
+  for (const [, raw] of message.matchAll(/\[(?:file|folder):([^\]]+)\]/g)) {
+    add(expand(raw!) ?? resolve(base.workingDirectory, raw!.trim()))
+  }
+  for (const [, raw] of message.matchAll(/\[Mentioned (?:file|folder): [^\]]*?\(at ([^)\]]+)\)\]/g)) add(expand(raw!))
+  for (const [, raw] of message.matchAll(/(?:^|[\s([{"'`])@([^\s@"'`()[\]{}<>]+)/g)) {
+    const token = raw!.replace(TRAILING_PUNCTUATION, '')
+    const absolute = expand(token)
+    if (absolute) {
+      add(absolute)
+      continue
+    }
+    // `@name` is a handle unless it looks like a path that exists
+    if (!token.includes('/') && !/\.\w+$/.test(token)) continue
+    const candidates = [resolve(base.workingDirectory, token), resolve(base.root, token)]
+    add(candidates.find(exists) ?? null)
+  }
+  for (const [, raw] of message.matchAll(/(?:^|[\s([{"'`=])((?:~\/|\/)[^\s"'`<>()[\]{}]+)/g)) add(expand(raw!))
+  for (const attachment of attachments ?? []) if (attachment.path) add(expand(attachment.path))
+  return [...paths]
+}
+
+export type CwdPathSignal = { kind: 'root' } | { kind: 'target'; candidate: CwdCandidate }
+
+/**
+ * What the paths point at: one candidate (`target`, the deepest containing them), the root itself
+ * (`root`: inside it, outside every candidate), or nothing when they point at different places or
+ * outside the root.
+ */
+export function classifyPaths(paths: readonly string[], root: string, candidates: readonly CwdCandidate[]): CwdPathSignal | null {
+  const buckets = new Map<string, CwdCandidate | null>()
+  for (const path of paths) {
+    const candidate = deepestContaining(candidates, path)
+    if (candidate) buckets.set(candidate.key, candidate)
+    else if (isWithin(root, path)) buckets.set('', null)
+  }
+  if (buckets.size !== 1) return null
+  const [only] = buckets.values()
+  return only ? { kind: 'target', candidate: only } : { kind: 'root' }
+}
+
+function escapeRegExp(text: string): string {
+  return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** `phrase` appears in `text` as a whole token (letters, digits, `_`, `-` and dotted names never run into it), any case. */
+function containsToken(text: string, phrase: string): boolean {
+  return new RegExp(`(?<![\\p{L}\\p{N}_.-])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`, 'iu').test(text)
+}
+
+/**
+ * Candidates the message names, in list order: by folder name or by an alias (at least
+ * `MIN_NAME_LENGTH` characters), as a whole token, any case, accents as written (both sides NFC).
+ */
+export function findNamedCandidates(message: string, candidates: readonly CwdCandidate[]): NamedCandidate[] {
+  const text = message.normalize('NFC')
+  const named: NamedCandidate[] = []
+  for (const candidate of candidates) {
+    const name = basename(candidate.path).normalize('NFC')
+    if (name.length >= MIN_NAME_LENGTH && containsToken(text, name)) named.push({ ...candidate, match: 'name' })
+    else if (candidate.aliases.some(alias => alias.length >= MIN_NAME_LENGTH && containsToken(text, alias))) named.push({ ...candidate, match: 'alias' })
+  }
+  return named
+}
+
+// ── Task folders ────────────────────────────────────────────────────────
+
+/** Words of `text` (NFC, lower case) of `MIN_TASK_WORD_LENGTH`+ characters with a letter (no dates). */
+function wordsOf(text: string): Set<string> {
+  const words = new Set<string>()
+  for (const word of text.normalize('NFC').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (word.length >= MIN_TASK_WORD_LENGTH && /\p{L}/u.test(word)) words.add(word)
+  }
+  return words
+}
+
+/**
+ * The task folder of `project` the message names: of its direct subfolders (not starting with
+ * `.` or `_`, not themselves listed), the one sharing the most words with the message, leaving out
+ * the words of the project's own path (its name and the folders above it). It needs
+ * `MIN_TASK_NAME_WORDS`, and no other folder as many unless only it holds one of `paths`; else `null`.
+ */
+export function findTaskFolder(project: CwdCandidate, message: string, listed: readonly CwdCandidate[], paths: readonly string[] = []): string | null {
+  const projectWords = wordsOf(project.path)
+  const messageWords = wordsOf(message)
+  let best: string[] = []
+  let bestScore = MIN_TASK_NAME_WORDS
+  for (const entry of readEntries(project.path).slice(0, MAX_TASK_FOLDERS)) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name.startsWith('_')) continue
+    const path = join(project.path, entry.name)
+    if (listed.some(candidate => candidate.path === path)) continue
+    let score = 0
+    for (const word of wordsOf(entry.name)) if (!projectWords.has(word) && messageWords.has(word)) score++
+    if (score > bestScore) {
+      best = [path]
+      bestScore = score
+    } else if (score === bestScore) {
+      best.push(path)
+    }
+  }
+  if (best.length > 1) best = best.filter(folder => paths.some(path => isWithin(folder, path)))
+  return best.length === 1 ? best[0]! : null
+}
+
+/**
+ * A route to a listed folder goes into the task folder the message names, when it is usable.
+ * Attachments inside the project add the words of their path below it; `paths` break a tie.
+ */
+function intoTaskFolder(ctx: CwdRouteContext, route: CwdRoute, input: CwdRouterInput, candidates: readonly CwdCandidate[], paths: readonly string[]): CwdRoute {
+  if (route.action !== 'route' || route.last) return route
+  const project = candidates.find(candidate => candidate.path === route.target)
+  if (!project) return route
+  const below = (input.attachments ?? [])
+    .map(attachment => (attachment.path && isAbsolute(attachment.path) && isWithin(project.path, resolve(attachment.path)) ? relative(project.path, resolve(attachment.path)) : ''))
+  const task = findTaskFolder(project, [input.message, ...below].join(' '), candidates, paths)
+  if (!task || !ctx.isValid(task)) return route
+  const key = keyOf(ctx.root, task)
+  return { ...route, target: task, to: key, task: key }
+}
+
+// ── Model ───────────────────────────────────────────────────────────────
+
+export function buildCwdRouterRequest(input: {
+  message: string
+  attachments?: readonly string[]
+  current: { path: string; description: string }
+  options: readonly CwdCandidate[]
+}): DecisionRequest {
+  const message = input.message.length > MESSAGE_MAX_CHARS ? `${input.message.slice(0, MESSAGE_MAX_CHARS)}…` : input.message
+  const criteria: Record<string, string | null> = {}
+  for (const option of input.options) criteria[option.key] = option.description || null
+  criteria[STAY] = STAY_CRITERION
+  criteria[UNCLEAR] = UNCLEAR_CRITERION
+  return {
+    state: {
+      message,
+      attachments: [...(input.attachments ?? [])],
+      current: input.current,
+    },
+    questions: {
+      target: { type: 'choice', instructions: TARGET_INSTRUCTIONS, criteria },
+    },
+  }
+}
+
+/** The small model's prompt: the same state and options as the decision model's request, as text, asking for one option key back. */
+export function buildMiniModelPrompt(input: {
+  message: string
+  attachments?: readonly string[]
+  current: { path: string; description: string }
+  options: readonly CwdCandidate[]
+}): string {
+  const message = input.message.length > MESSAGE_MAX_CHARS ? `${input.message.slice(0, MESSAGE_MAX_CHARS)}…` : input.message
+  const current = input.current.description ? `${input.current.path} — ${input.current.description}` : input.current.path
+  const options = [
+    ...input.options.map(option => (option.description ? `- ${option.key}: ${option.description}` : `- ${option.key}`)),
+    `- ${STAY}: ${STAY_CRITERION}`,
+    `- ${UNCLEAR}: ${UNCLEAR_CRITERION}`,
+  ]
+  return [
+    `${TARGET_INSTRUCTIONS} Pick the folder a chat message is about, from the list below.`,
+    '',
+    '<message>',
+    message,
+    '</message>',
+    ...(input.attachments?.length ? [`Attachments: ${input.attachments.join(', ')}`] : []),
+    `Current folder: ${current}`,
+    '',
+    'Folders (key: when to pick it):',
+    ...options,
+    '',
+    'Reply with exactly one key from the list, nothing else.',
+  ].join('\n')
+}
+
+/**
+ * The option key the small model replied with: the whole reply, give or take surrounding quotes,
+ * backticks and a final period, must be one key (`stay` and `unclear` included). `null` otherwise.
+ */
+export function parseMiniModelAnswer(text: string | null | undefined, options: readonly CwdCandidate[]): string | null {
+  if (!text) return null
+  let answer = text.trim()
+  for (let previous = ''; previous !== answer;) {
+    previous = answer
+    answer = answer.replace(/^[`"']+|[`"']+$/g, '').replace(/\.$/, '').trim()
+  }
+  if (!answer) return null
+  const keys = [...options.map(option => option.key), STAY, UNCLEAR]
+  if (keys.includes(answer)) return answer
+  const folded = keys.filter(key => key.toLowerCase() === answer.toLowerCase())
+  return folded.length === 1 ? folded[0]! : null
+}
+
+/** Apply the route rules to the small model's pick. It gives no confidence: its pick is taken. `named`: candidates named in the message. */
+export function judgeMiniModelAnswer(
+  ctx: CwdRouteContext,
+  choice: string | null,
+  options: readonly CwdCandidate[],
+  named: readonly NamedCandidate[],
+): CwdRoute {
+  const via = 'mini_model' as const
+  if (choice === STAY || choice === UNCLEAR) return stay(ctx, 'model', 'stay_or_unclear', { via })
+  const target = choice ? options.find(option => option.key === choice) : undefined
+  if (!target) return stay(ctx, 'model', 'no_answer', { via })
+  const reason = named.find(candidate => candidate.key === target.key)?.match ?? 'model'
+  const picked = { ...pickedLabel(ctx, target), via }
+  if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
+  return { action: 'route', target: target.path, reason, from: ctx.from, ...picked }
+}
+
+/** The small model's reply, or `null` on an error or when it takes longer than `deadlineMs` (the call is then aborted). */
+async function askMiniModelWithin(
+  ask: NonNullable<CwdRouterDeps['askMiniModel']>,
+  prompt: string,
+  deadlineMs: number,
+  log?: (message: string) => void,
+): Promise<string | null> {
+  const tag = '[auto_working_directory]'
+  const controller = new AbortController()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<null>(resolve => {
+    timer = setTimeout(() => {
+      log?.(`${tag} small model: no answer within ${deadlineMs} ms`)
+      controller.abort()
+      resolve(null)
+    }, deadlineMs)
+  })
+  const answer = ask(prompt, controller.signal).catch((error: unknown) => {
+    log?.(`${tag} small model failed: ${error instanceof Error ? error.message : String(error)}`)
+    return null
+  })
+  try {
+    return await Promise.race([answer, timeout])
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
+export interface CwdRouteContext {
+  root: string
+  /** The session's folder now (the root, or a remembered folder). */
+  workingDirectory: string
+  /** `workingDirectory` below the root (`(root)` for the root itself). */
+  from: string
+  isValid: (path: string) => boolean
+}
+
+/** How a route names its target: its path below the root, flagged when it is the `last` option. */
+function pickedLabel(ctx: CwdRouteContext, target: CwdCandidate): { to: string; last?: true } {
+  return target.key === LAST ? { to: keyOf(ctx.root, target.path), last: true } : { to: target.key }
+}
+
+/** No folder picked: the session works in the root. */
+function stay(ctx: CwdRouteContext, reason: CwdRoute['reason'], rule: CwdStayRule, extra: Partial<CwdRoute> = {}): CwdRoute {
+  return { action: 'stay', reason, from: ctx.from, rule, ...extra }
+}
+
+/** A path or a folder name pointing at `target`, without the model. */
+export function judgeHardSignal(ctx: CwdRouteContext, target: CwdCandidate, reason: 'path' | CwdNameMatch): CwdRoute {
+  if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', pickedLabel(ctx, target))
+  return { action: 'route', target: target.path, reason, from: ctx.from, ...pickedLabel(ctx, target) }
+}
+
+/** Apply the route rules to the decision model's answer. `named`: candidates named in the message. */
+export function judgeModelAnswer(
+  ctx: CwdRouteContext,
+  result: DecisionResult | null,
+  options: readonly CwdCandidate[],
+  named: readonly NamedCandidate[],
+): CwdRoute {
+  const answer = result?.answers.target
+  if (!answer || answer.type !== 'choice') return stay(ctx, 'model', 'no_answer')
+  const confidence = answer.confidence
+  if (answer.choice === STAY || answer.choice === UNCLEAR) return stay(ctx, 'model', 'stay_or_unclear', { confidence })
+  const target = options.find(option => option.key === answer.choice)
+  if (!target) return stay(ctx, 'model', 'no_answer')
+  const hit = named.find(candidate => candidate.key === target.key)?.match
+  const nameHit = hit !== undefined
+  const reason = hit ?? 'model'
+  const picked = { confidence, ...pickedLabel(ctx, target) }
+  if (confidence < MIN_TARGET_CONFIDENCE) return stay(ctx, reason, 'low_confidence', picked)
+  if (!nameHit && confidence < ROUTE_FROM_ROOT_AT) return stay(ctx, reason, 'below_threshold', picked)
+  if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
+  return { action: 'route', target: target.path, reason, from: ctx.from, ...picked }
+}
+
+/**
+ * The pick, relative to where the session is: picking the folder it is in keeps it there
+ * (`already_there`), and picking nothing for a session in a remembered folder moves it to the root.
+ */
+function settle(ctx: CwdRouteContext, pick: CwdRoute): CwdRoute {
+  if (pick.action === 'route') {
+    return isSameDirectory(pick.target, ctx.workingDirectory) ? { ...pick, action: 'stay', target: undefined, rule: 'already_there' } : pick
+  }
+  if (isSameDirectory(ctx.workingDirectory, ctx.root)) return pick
+  return { ...pick, action: 'route', target: ctx.root, to: ROOT_LABEL }
+}
+
+/**
+ * Where the session's first message says it should work, picked from the root. `null` when the
+ * router does not apply (the folder is outside the root, or no listed folder is usable). Never
+ * throws on a model failure; a filesystem error may throw, so callers wrap it.
+ */
+export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRouterDeps = {}): Promise<CwdRoute | null> {
+  const tag = '[decision:auto_working_directory]'
+  const root = resolve(input.root)
+  const workingDirectory = resolve(input.workingDirectory)
+  if (!isWithin(root, workingDirectory)) {
+    deps.log?.(`${tag} skipped: the working directory is outside the context root`)
+    return null
+  }
+  const parsed = parseFolderList(input.folders, root)
+  const issues = parsed.issues
+  // Reserved option keys: such a folder can be neither offered nor told apart from them
+  const listed = parsed.candidates.filter(candidate => !RESERVED_KEYS.has(candidate.key))
+  if (issues.length > 0) deps.log?.(`${tag} folder list lines skipped: ${issues.map(issue => `${issue.line} (${issue.kind})`).join(', ')}`)
+  if (listed.length === 0) return null
+
+  const ctx: CwdRouteContext = {
+    root,
+    workingDirectory,
+    from: workingDirectory === root ? ROOT_LABEL : keyOf(root, workingDirectory),
+    isValid: deps.isValidDirectory ?? (path => isValidWorkingDirectory(path).valid),
+  }
+  const { option: last, candidates } = lastOption(input.lastWorkingDirectory, root, listed, ctx.isValid)
+  const paths = collectMessagePaths(input.message, input.attachments, { workingDirectory, root, homeDir: deps.homeDir })
+  const picked = await pickFromRoot(ctx, input, candidates, last, paths, deps)
+  const route = settle(ctx, intoTaskFolder(ctx, picked.route, input, candidates, paths))
+  // What happened to the session, for the decision model's answers only
+  recordDecisionOutcome(picked.decision, {
+    action: route.action,
+    changed: route.action === 'route',
+    detail: { reason: route.reason, rule: route.rule, from: route.from, to: route.to, confidence: route.confidence },
+  })
+  return route
+}
+
+/**
+ * The pick from the root, with the decision model's answer when it was asked. `last`: the folder the
+ * latest chat worked in, for paths inside it and as a model option; never matched by name.
+ */
+async function pickFromRoot(
+  ctx: CwdRouteContext,
+  input: CwdRouterInput,
+  candidates: CwdCandidate[],
+  last: CwdCandidate | null,
+  paths: readonly string[],
+  deps: CwdRouterDeps,
+): Promise<{ route: CwdRoute; decision?: DecisionResult | null }> {
+  const settled = (route: CwdRoute) => ({ route })
+  const pathSignal = classifyPaths(paths, ctx.root, last ? [...candidates, last] : candidates)
+  if (pathSignal?.kind === 'root') return settled(stay(ctx, 'path', 'in_root'))
+  if (pathSignal?.kind === 'target') return settled(judgeHardSignal(ctx, pathSignal.candidate, 'path'))
+
+  const named = findNamedCandidates(input.message, candidates)
+  if (named.length === 1) return settled(judgeHardSignal(ctx, named[0]!, named[0]!.match))
+
+  // Several folders named: the model picks among them (the last folder is not one of them)
+  const options: CwdCandidate[] = named.length > 1 ? named : last ? [...candidates, last] : candidates
+  if (options.length === 0) return settled(stay(ctx, 'model', 'no_answer'))
+  const attachments = input.attachments?.map(attachment => (attachment.type ? `${attachment.name} (${attachment.type})` : attachment.name))
+  const current = { path: ROOT_LABEL, description: describeFolder(ctx.root, ctx.root) }
+  // The turn start waits for this answer. The decision model needs only the decision layer on (no toggle).
+  const decide = await openDecisionPoint({ ...deps, record: 'auto_working_directory', maxDeadlineMs: FOREGROUND_MAX_DEADLINE_MS, sessionId: input.sessionId })
+  if (!decide) {
+    // Off or unavailable: the connection's small model, if the host offers one. Not in decisions.jsonl.
+    if (!deps.askMiniModel) return settled(stay(ctx, 'model', 'no_answer'))
+    const prompt = buildMiniModelPrompt({ message: input.message, attachments, current, options })
+    const reply = await askMiniModelWithin(deps.askMiniModel, prompt, deps.miniModelDeadlineMs ?? MINI_MODEL_DEADLINE_MS, deps.log)
+    return settled(judgeMiniModelAnswer(ctx, parseMiniModelAnswer(reply, options), options, named))
+  }
+  const request = buildCwdRouterRequest({ message: input.message, attachments, current, options })
+  // No answer from a decision model that opened: stay rather than wait again for the small model
+  const decision = await decide(request, { candidates: options.length, narrowed: named.length > 1 })
+  return { route: { ...judgeModelAnswer(ctx, decision, options, named), via: 'jev' }, decision }
+}
+
+/** One line for the transcript and the log, e.g. `Auto working directory: (root) → projects/acme (name)`. */
+export function describeRoute(route: CwdRoute): string {
+  const why = [
+    route.reason,
+    route.confidence !== undefined ? route.confidence.toFixed(2) : '',
+    route.last ? 'last' : '',
+    route.task ? 'task name' : '',
+  ].filter(Boolean).join(', ')
+  return `Auto working directory: ${route.from} → ${route.to ?? '?'} (${why})`
+}
+
+/**
+ * `[file:…]`/`[folder:…]` mentions with a relative path, made absolute in `base`, the folder the
+ * message was written in: the agent resolves relative mentions in its own folder, which a route
+ * has just changed.
+ */
+export function anchorRelativeMentions(text: string, base: string): string {
+  return text.replace(/\[(file|folder):([^\]]+)\]/g, (match, kind: string, path: string) =>
+    path.startsWith('/') || path.startsWith('~') ? match : `[${kind}:${join(base, path)}]`)
+}

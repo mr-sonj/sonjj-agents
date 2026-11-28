@@ -88,6 +88,7 @@ export type EditContextKey =
   | 'edit-views'
   | 'edit-tool-icons'
   | 'automation-config'
+  | 'auto-working-directory'
 
 /**
  * Full edit configuration including context for agent and example for UI.
@@ -562,6 +563,26 @@ const EDIT_CONFIGS: Record<EditContextKey, (location: string) => EditConfig> = {
     example: 'Change the cron schedule to every 30 minutes',
     displayLabelKey: 'editPopover.label.automationConfiguration',
     exampleKey: 'editPopover.example.automationConfig',
+    model: 'default',
+    systemPromptPreset: 'mini',
+    inlineExecution: true,
+  }),
+
+  // Workspace Settings → Auto working directory (the session runs in the workspace's working directory)
+  'auto-working-directory': (location) => ({
+    context: {
+      label: 'Auto Working Directory Folders',
+      filePath: `${location}/config.json`,
+      context:
+        'The user is in Workspace Settings and pressed the edit button on the Auto working directory folder list. ' +
+        'Read ~/.craft-agent/docs/auto-working-directory.md first: it gives the format of "autoWorkingDirectoryFolders" ' +
+        'in this workspace config.json and how to write each note. ' +
+        'This session runs in the working directory (the root of the paths): to find projects, look through its folders. ' +
+        'Change only what the user asks and confirm clearly what changed.',
+    },
+    example: 'Add the new project folders and describe each one',
+    displayLabelKey: 'editPopover.label.autoWorkingDirectory',
+    exampleKey: 'editPopover.example.autoWorkingDirectory',
     model: 'default',
     systemPromptPreset: 'mini',
     inlineExecution: true,

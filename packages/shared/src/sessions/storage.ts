@@ -181,6 +181,7 @@ export async function createSession(
   options?: {
     name?: string;
     workingDirectory?: string;
+    workingDirectoryOrigin?: SessionConfig['workingDirectoryOrigin'];
     permissionMode?: SessionConfig['permissionMode'];
     enabledSourceSlugs?: string[];
     model?: string;
@@ -217,6 +218,7 @@ export async function createSession(
     createdAt: now,
     lastUsedAt: now,
     workingDirectory: options?.workingDirectory,
+    workingDirectoryOrigin: options?.workingDirectoryOrigin,
     sdkCwd,
     permissionMode: options?.permissionMode,
     enabledSourceSlugs: options?.enabledSourceSlugs,

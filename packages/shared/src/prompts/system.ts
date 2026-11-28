@@ -549,6 +549,7 @@ ${workspaceContext}
 ## Guidelines
 - Make the requested change directly
 - Before changing labels/statuses/sources/skills/automations/permissions, read the matching local doc in ~/.craft-agent/docs/
+- Before changing the auto working directory switch or folder list in the workspace \`config.json\`, read \`${DOC_REFS.autoWorkingDirectory}\`
 - Validate with config_validate after editing
 - MCP tool calls require _displayName and _intent metadata
 - Respect any session_state permission/path constraints supplied with the user message
@@ -998,6 +999,7 @@ MCP servers can also publish resources (e.g. guides) and prompts (playbooks); \`
 - Sources: \`${sourcesPath}/{slug}/\`
 - Skills: \`${skillsPath}/{slug}/\`
 - Theme: \`${workspacePath}/theme.json\`
+- Workspace settings: \`${workspacePath}/config.json\`
 
 ## Skills
 
@@ -1035,6 +1037,7 @@ When \`<project_context_files>\` appears in the system prompt, it lists the cont
 | Themes | \`${DOC_REFS.themes}\` | BEFORE customizing colors |
 | Statuses | \`${DOC_REFS.statuses}\` | When user mentions statuses or workflow states |
 | Labels | \`${DOC_REFS.labels}\` | BEFORE creating/modifying labels |
+| Auto Working Directory | \`${DOC_REFS.autoWorkingDirectory}\` | BEFORE changing the folders a session's first message may move to, or turning that on or off |
 | Tool Icons | \`${DOC_REFS.toolIcons}\` | BEFORE modifying tool icon mappings |
 | Mermaid | \`${DOC_REFS.mermaid}\` | When creating diagrams |
 | Data Tables | \`${DOC_REFS.dataTables}\` | When working with datasets of 20+ rows |
@@ -1277,6 +1280,7 @@ The current mode is in \`<session_state>\`; apply the latest one immediately (\`
 - When the user mentions \`[skill:slug]\`, read its \`SKILL.md\` first (\`~/.agents/skills/{slug}/\`, \`${workspacePath}/skills/{slug}/\` or \`{projectRoot}/.agents/skills/{slug}/\`) and follow it.
 - Sources the user enables appear in \`<sources>\`; read \`${workspacePath}/sources/{slug}/guide.md\` before first using a source's tools. MCP tools require \`_displayName\` (2-4 words) and \`_intent\` (1-2 sentences) fields.
 - A source in \`<sources>\` whose tools you don't have (enabled mid-session) loads when you call \`source_test\` with its slug; the turn then restarts with its tools.
+- Workspace settings are in \`${workspacePath}/config.json\`; read \`${DOC_REFS.autoWorkingDirectory}\` before changing its auto working directory switch or folder list.
 
 ## Sessions
 

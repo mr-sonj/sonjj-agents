@@ -155,11 +155,16 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
       defaultLlmConnection: config?.defaults?.defaultLlmConnection,
       enabledSourceSlugs: config?.defaults?.enabledSourceSlugs ?? [],
       chatStarters: config?.chatStarters ?? [],
+      // Only a stored `true` is on (a hand-written "true" is not)
+      autoWorkingDirectory: config?.autoWorkingDirectory === true,
+      ...(await readAutoWorkingDirectoryFolders(config)),
     }
   })
 
   // Update a workspace setting
   server.handle(RPC_CHANNELS.workspace.SETTINGS_UPDATE, async (_ctx, workspaceId: string, key: string, value: unknown) => {
+    if (key === 'autoWorkingDirectoryFolders') return saveAutoWorkingDirectoryFolders(workspaceId, value, deps)
+    if (key === 'autoWorkingDirectory') return saveAutoWorkingDirectorySwitch(workspaceId, value, deps)
     const workspace = getWorkspaceOrThrow(workspaceId)
     const isDirectoryKey = key === 'skillsDirectory' || key === 'sourcesDirectory'
     const trimmedValue = (key === 'workingDirectory' || isDirectoryKey) && typeof value === 'string'
@@ -447,4 +452,49 @@ export function registerSettingsHandlers(server: RpcServer, deps: HandlerDeps): 
     const { getNetworkProxySettings } = await import('@craft-agent/shared/config/storage')
     return getNetworkProxySettings()
   })
+}
+
+/**
+ * The auto working directory folder list for the settings page, and the lines naming no usable
+ * folder (paths are relative to the working directory). Read leniently: a hand-edited list that is
+ * a string or holds non-strings never fails the whole page; odd entries show up as such lines.
+ */
+async function readAutoWorkingDirectoryFolders(config: { autoWorkingDirectoryFolders?: unknown; defaults?: { workingDirectory?: string } } | null | undefined) {
+  const { parseFolderList, readFolderListLines } = await import('../../decisions/cwd-router')
+  const lines = readFolderListLines(config?.autoWorkingDirectoryFolders)
+  const root = config?.defaults?.workingDirectory
+  return {
+    autoWorkingDirectoryFolders: lines,
+    autoWorkingDirectoryIssues: lines.length > 0 && root ? parseFolderList(lines, root, { describe: false }).issues : [],
+  }
+}
+
+/**
+ * Auto working directory folder list (top-level `autoWorkingDirectoryFolders`): saved as typed,
+ * one line per entry; the lines are checked when the settings are read.
+ */
+async function saveAutoWorkingDirectoryFolders(workspaceId: string, value: unknown, deps: HandlerDeps): Promise<void> {
+  const workspace = getWorkspaceOrThrow(workspaceId)
+  const { normalizeFolderListLines } = await import('../../decisions/cwd-router')
+  const lines = normalizeFolderListLines(value)
+  const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+  const config = loadWorkspaceConfig(workspace.rootPath)
+  if (!config) throw new Error(`Failed to load workspace config: ${workspaceId}`)
+  if (lines.length > 0) config.autoWorkingDirectoryFolders = lines
+  else delete config.autoWorkingDirectoryFolders
+  saveWorkspaceConfig(workspace.rootPath, config)
+  deps.platform.logger.info(`Workspace setting updated: autoWorkingDirectoryFolders (${lines.length} lines)`)
+}
+
+/** Auto working directory switch (top-level `autoWorkingDirectory`): stored as `true`, removed when off. */
+async function saveAutoWorkingDirectorySwitch(workspaceId: string, value: unknown, deps: HandlerDeps): Promise<void> {
+  if (typeof value !== 'boolean') throw new Error('autoWorkingDirectory must be true or false')
+  const workspace = getWorkspaceOrThrow(workspaceId)
+  const { loadWorkspaceConfig, saveWorkspaceConfig } = await import('@craft-agent/shared/workspaces')
+  const config = loadWorkspaceConfig(workspace.rootPath)
+  if (!config) throw new Error(`Failed to load workspace config: ${workspaceId}`)
+  if (value) config.autoWorkingDirectory = true
+  else delete config.autoWorkingDirectory
+  saveWorkspaceConfig(workspace.rootPath, config)
+  deps.platform.logger.info(`Workspace setting updated: autoWorkingDirectory (${value ? 'on' : 'off'})`)
 }

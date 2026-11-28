@@ -83,6 +83,19 @@ export interface WorkspaceConfig {
    */
   chatStarters?: ChatStarter[];
 
+  /**
+   * Auto working directory: a new session's first message may move the session to the project
+   * folder it is about (only `true` is on). Guide for agents: `docs/auto-working-directory.md`.
+   */
+  autoWorkingDirectory?: boolean;
+
+  /**
+   * Auto working directory: the only folders a session's first message may move to. One line
+   * each, `<path relative to defaults.workingDirectory>: <when to pick it>`; lines starting with
+   * `#` are comments.
+   */
+  autoWorkingDirectoryFolders?: string[];
+
   createdAt: number;
   updatedAt: number;
 }
