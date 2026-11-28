@@ -58,14 +58,17 @@ Branch: `feature/auto-working-directory`
 A new session's first message can move the session to the project folder it is about before the agent
 starts, so the project's `AGENTS.md` and the shell's folder are right from the first turn. Turn it on per
 workspace in **Workspace Settings → Auto working directory** (off by default) and list the folders it may
-pick there, one `path: when to pick it` line each. An edit button lets an agent add new project folders and
-describe them, and an agent in any chat can do the same (it reads the bundled guide
-`docs/auto-working-directory.md`). With no list nothing moves. A path or a listed folder's name in the
-message counts first; otherwise the decision model picks when it is on, else the small model of the
-session's connection (one short call, at most 8 seconds), and the session stays where it is when unsure. It
-only acts while the session is still in the workspace's working directory (or one remembered from an earlier
-session), never after you pick a folder, and never for task, automation, branch or hidden sessions. A move
-is never remembered as the folder for later sessions.
+pick there, one `path (aliases): when to pick it` line each. An edit button lets an agent add new project
+folders and describe them, and an agent in any chat can do the same (it reads the bundled guide
+`docs/auto-working-directory.md`). With no list nothing moves. With it on, a new chat starts in the
+workspace's working directory, not in the folder remembered from an earlier session, and its first message
+picks from there: a path, a listed folder's name or alias counts first; otherwise the decision model picks
+when it is on, else the small model of the session's connection (one short call, at most 8 seconds). The
+folder of your latest chat is offered for a message that continues earlier work, and once a listed folder
+is picked the session goes into a subfolder whose name the message gives (two words or more). When unsure
+the session works in the workspace's folder. It never acts after you pick a folder below it (picking the
+workspace's folder itself leaves it on), and never for tasks, kanban tiles, automations, subtasks, branches,
+project or hidden sessions. A move is never remembered as the folder for later sessions.
 
 Main files: `packages/server-core/src/decisions/cwd-router.ts`,
 `packages/server-core/src/sessions/SessionManager.ts`,
