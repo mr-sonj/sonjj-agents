@@ -42,6 +42,11 @@ describe('auto working directory', () => {
 
   beforeEach(() => {
     wsRoot = mkdtempSync(join(tmpdir(), 'sm-auto-cwd-ws-'))
+    mkdirSync(join(wsRoot, 'labels'), { recursive: true })
+    writeFileSync(join(wsRoot, 'labels/config.json'), JSON.stringify({
+      version: 1,
+      labels: [{ id: 'task', name: 'Task', children: [{ id: 'task-item-1', name: 'TASK-ship-1' }] }, { id: 'bug', name: 'Bug' }],
+    }))
     projectRoot = mkdtempSync(join(tmpdir(), 'sm-auto-cwd-root-'))
     write('AGENTS.md', '# Root')
     write('projects/acme/AGENTS.md', '# Acme\n\nStorefront API.')
@@ -160,6 +165,9 @@ describe('auto working directory', () => {
     // Already done: a finished mini session moves itself to done, which writes after the cleanup
     ['it is a mini agent', { systemPromptPreset: 'mini', sessionStatus: 'done' }],
     ['the message is a slash command', {}, '/compact'],
+    // A kanban tile ("Create task") has no task slug, only the task's label
+    ['it carries a task label', { labels: ['task-item-1'] }],
+    ['it carries the Task label itself', { labels: ['task'] }],
   ]
   for (const [why, fields, message, options] of notAsked) {
     it(`does not ask when ${why}`, async () => {
@@ -291,6 +299,63 @@ describe('auto working directory', () => {
     const router = spyOn(cwdRouter, 'routeWorkingDirectory')
     await sm.sendMessage(managed.id, 'plan the garden for spring')
     expect(router).not.toHaveBeenCalled()
+  })
+
+  it('lets the first message pick again after the user picks the root', async () => {
+    const acme = join(projectRoot, 'projects/acme')
+    const managed = await session('root-pick', { workingDirectory: acme, sdkCwd: acme, workingDirectoryOrigin: 'user' })
+    sm.updateWorkingDirectory(managed.id, `${projectRoot}/`)
+    expect(managed.workingDirectoryOrigin).toBe('default')
+    await sm.sendMessage(managed.id, 'plan the garden for spring')
+    expect(managed.workingDirectory).toBe(join(projectRoot, 'projects/garden'))
+  })
+
+  it('still asks for a chat with a label that is not a task\'s', async () => {
+    const managed = await session('plain-label', { labels: ['bug'] })
+    const router = spyOn(cwdRouter, 'routeWorkingDirectory').mockResolvedValue(null)
+    await sm.sendMessage(managed.id, 'plan the garden for spring')
+    expect(router).toHaveBeenCalledTimes(1)
+  })
+
+  it('keeps the root the user picked while the small model ran', async () => {
+    const managed = await session('root-picked-during-small-model')
+    smallModel(async () => {
+      sm.updateWorkingDirectory(managed.id, projectRoot)
+      return 'projects/acme'
+    })
+    await sm.sendMessage(managed.id, 'check the storefront prices')
+    expect(managed.workingDirectory).toBe(projectRoot)
+    expect(managed.workingDirectoryOrigin).toBe('default')
+  })
+
+  it('offers the folder of the latest chat, leaving out tasks, automations, hidden sessions, subtasks and chats at the root', async () => {
+    const chat = (id: string, rel: string, lastMessageAt: number, fields: Record<string, unknown> = {}) =>
+      session(id, { workingDirectory: join(projectRoot, rel), sdkCwd: join(projectRoot, rel), messageCount: 2, lastMessageAt, ...fields })
+    await chat('older-chat', 'projects/acme', 1)
+    await chat('latest-chat', 'projects/acme/tasks/rework', 2)
+    await chat('task', 'projects/garden', 3, { taskSlug: 'ship-it' })
+    await chat('tile', 'projects/garden', 3, { labels: ['task-item-1'] })
+    await chat('automation', 'projects/garden', 3, { triggeredBy: { automationName: 'nightly' } })
+    await chat('hidden', 'projects/garden', 3, { hidden: true })
+    await chat('subtask', 'projects/garden', 3, { parentSessionId: 'latest-chat' })
+    await chat('empty', 'projects/garden', 3, { messageCount: 0 })
+    await chat('at-root', '', 4)
+    const managed = await session('routed')
+    const router = spyOn(cwdRouter, 'routeWorkingDirectory').mockResolvedValue(null)
+    await sm.sendMessage(managed.id, 'continue')
+    expect(router.mock.calls[0]![0].lastWorkingDirectory).toBe(join(projectRoot, 'projects/acme/tasks/rework'))
+  })
+
+  it('moves a session in a remembered folder back to the root when the message picks nothing', async () => {
+    const acme = join(projectRoot, 'projects/acme')
+    const managed = await session('back-to-root', { workingDirectory: acme, sdkCwd: acme, workingDirectoryOrigin: 'inherited' })
+    smallModel(async () => 'stay')
+    await sm.sendMessage(managed.id, 'what is on today?')
+    expect(managed.workingDirectory).toBe(projectRoot)
+    expect(managed.sdkCwd).toBe(projectRoot)
+    expect(managed.workingDirectoryOrigin).toBe('auto')
+    expect(agentCreatedIn).toEqual([{ workingDirectory: projectRoot, sdkCwd: projectRoot }])
+    expect(events.find(e => e.type === 'info')).toMatchObject({ message: 'Auto working directory: projects/acme → (root) (model)' })
   })
 
   it('marks a folder picked in the chat as the user\'s', async () => {

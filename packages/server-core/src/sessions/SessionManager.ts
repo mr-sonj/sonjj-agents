@@ -118,10 +118,10 @@ import { buildGuardedModeCheck } from '../decisions/guarded-mode'
 import { buildSubagentModelPicker } from '../decisions/subagent-models'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
-import { describeRoute, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
+import { describeRoute, isSameDirectory, pickLastWorkingDirectory, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
 import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
-import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
+import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, resolveTaskScopeLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
 import { ensureLabelsExist, ensureTaskItemLabel } from '@craft-agent/shared/labels/crud'
 import { loadStatusConfig } from '@craft-agent/shared/statuses/storage'
 import { AutomationSystem, createPromptHistoryEntry, appendAutomationHistoryEntry, type AutomationSystemMetadataSnapshot, type PendingPrompt } from '@craft-agent/shared/automations'
@@ -821,6 +821,8 @@ interface ManagedSession {
   // Where workingDirectory came from: the first message may replace it only when 'default' or
   // 'inherited' (workspace switch `autoWorkingDirectory`). Absent in older sessions: treated as 'explicit'.
   workingDirectoryOrigin?: WorkingDirectoryOrigin
+  // Folder picks in the chat since the session loaded (runtime only): a pick while the router runs wins
+  workingDirectoryPicks?: number
   // Shared viewer URL (if shared via viewer)
   sharedUrl?: string
   // Shared session ID in viewer (for revoke)
@@ -6362,7 +6364,7 @@ export class SessionManager implements ISessionManager {
       }
 
       managed.workingDirectory = path
-      managed.workingDirectoryOrigin = 'user'
+      managed.workingDirectoryOrigin = this.noteWorkingDirectoryPick(managed, path)
 
       // Invalidate filesystem caches that depend on working directory
       invalidateContextFileCache(path)
@@ -6397,9 +6399,44 @@ export class SessionManager implements ISessionManager {
   }
 
   /**
+   * A folder picked (or reset) in the chat: the user's, except the workspace's own folder, which
+   * leaves the first message free to pick the folder again (`default`). Counted, so a pick made
+   * while the router runs is never overridden.
+   */
+  private noteWorkingDirectoryPick(managed: ManagedSession, path: string): WorkingDirectoryOrigin {
+    managed.workingDirectoryPicks = (managed.workingDirectoryPicks ?? 0) + 1
+    const root = loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.workingDirectory
+    return isSameDirectory(path, root) ? 'default' : 'user'
+  }
+
+  /** The session carries a task's label (a kanban tile, a task's subtask) or the Task label itself. */
+  private hasTaskLabel(labels: string[] | undefined, labelConfigs: () => LabelConfig[]): boolean {
+    return !!labels?.length && resolveTaskScopeLabelId(labels, labelConfigs()) !== undefined
+  }
+
+  /**
+   * The folder the latest chat of the workspace worked in, for the router's `last` option: chats
+   * with messages only, no task, automation, hidden, mini, unattended or subtask session.
+   */
+  private lastChatWorkingDirectory(managed: ManagedSession): string | undefined {
+    const root = loadWorkspaceConfig(managed.workspace.rootPath)?.defaults?.workingDirectory
+    if (!root) return undefined
+    let labelConfigs: LabelConfig[] | undefined
+    const configs = () => (labelConfigs ??= loadLabelConfig(managed.workspace.rootPath).labels)
+    const chats: { workingDirectory?: string; lastActivityAt: number }[] = []
+    for (const other of this.sessions.values()) {
+      if (other === managed || other.workspace.id !== managed.workspace.id || !hasConversationStarted(other)) continue
+      if (!isAttendedSession(other) || other.taskNodeId || other.taskDraft || other.parentSessionId) continue
+      if (this.hasTaskLabel(other.labels, configs)) continue
+      chats.push({ workingDirectory: other.workingDirectory, lastActivityAt: other.lastMessageAt })
+    }
+    return pickLastWorkingDirectory(chats, root)
+  }
+
+  /**
    * Whether this message may pick the session's folder (workspace switch `autoWorkingDirectory`): the first
    * user message of an interactive session with no agent yet, still in the workspace's default
-   * folder (or one remembered from an earlier session), and not a slash command.
+   * folder (or one remembered from an earlier session), and not a slash command or a task's.
    */
   private shouldAutoRouteWorkingDirectory(
     managed: ManagedSession,
@@ -6416,12 +6453,14 @@ export class SessionManager implements ISessionManager {
     if (message.trim().startsWith('/')) return false
     if (managed.messages.filter(m => m.role === 'user').length !== 1) return false
     // Read last: only a session's first message gets here. Works with or without the decision model.
-    return loadWorkspaceConfig(managed.workspace.rootPath)?.autoWorkingDirectory === true
+    if (loadWorkspaceConfig(managed.workspace.rootPath)?.autoWorkingDirectory !== true) return false
+    return !this.hasTaskLabel(managed.labels, () => loadLabelConfig(managed.workspace.rootPath).labels)
   }
 
   /** Ask the cwd router and apply its route. Never throws: on any failure the session keeps its folder. */
   private async autoRouteWorkingDirectory(managed: ManagedSession, message: string, attachments?: FileAttachment[]): Promise<void> {
     const from = managed.workingDirectory
+    const picks = managed.workingDirectoryPicks
     try {
       const config = loadWorkspaceConfig(managed.workspace.rootPath)
       const root = config?.defaults?.workingDirectory
@@ -6429,7 +6468,7 @@ export class SessionManager implements ISessionManager {
       const folders = readFolderListLines(config?.autoWorkingDirectoryFolders)
       if (!root || !from || !folders.length) return
       const route = await routeWorkingDirectory(
-        { root, workingDirectory: from, message, attachments, sessionId: managed.id, folders },
+        { root, workingDirectory: from, message, attachments, sessionId: managed.id, folders, lastWorkingDirectory: this.lastChatWorkingDirectory(managed) },
         {
           log: line => sessionLog.info(line),
           // Without the decision model: the small model of the connection this session will use
@@ -6439,8 +6478,8 @@ export class SessionManager implements ISessionManager {
       if (!route) return
       sessionLog.info(`[auto-working-directory] Session ${managed.id}: ${route.action} (${route.reason}${route.via ? ` via ${route.via}` : ''}${route.rule ? `, ${route.rule}` : ''}) from ${route.from}${route.to ? ` to ${route.to}` : ''}`)
       if (route.action !== 'route' || !route.target) return
-      // Deleted, or the user picked a folder while the router ran: nothing to move, or theirs stands
-      if (this.sessions.get(managed.id) !== managed || managed.workingDirectory !== from || managed.workingDirectoryOrigin === 'user') return
+      // Deleted, or the user picked a folder (the root too) while the router ran: nothing to move, or theirs stands
+      if (this.sessions.get(managed.id) !== managed || managed.workingDirectory !== from || managed.workingDirectoryPicks !== picks) return
       this.applyAutoWorkingDirectory(managed, route.target, route)
     } catch (error) {
       sessionLog.warn(`[auto-working-directory] Session ${managed.id}: router failed, keeping ${from}:`, error)
