@@ -1100,9 +1100,22 @@ export function createOpenAiSseStrippingStream(): TransformStream<Uint8Array, Ui
       }
     }
 
+    const hasFinish = choices.some(choice => choice?.finish_reason != null);
+
     // Suppress all upstream tool_call delta payloads. Consolidated events
     // are emitted on flush.
     if (handledToolCalls) {
+      // Some relays (e.g. Gemini behind OpenAI-compatible proxies) put
+      // finish_reason on the chunk carrying the last tool arguments. Dropping
+      // that chunk starves the SDK of finish_reason ("Stream ended without
+      // finish_reason"), so flush the calls, then forward the chunk without
+      // its tool_calls.
+      if (!hasFinish) return;
+      flushTrackedCalls(controller);
+      for (const choice of choices) {
+        if (choice?.delta) delete choice.delta.tool_calls;
+      }
+      emitSseLine(JSON.stringify(data), controller);
       return;
     }
 
@@ -1110,7 +1123,6 @@ export function createOpenAiSseStrippingStream(): TransformStream<Uint8Array, Ui
     const forwardStr = strippedEmptyToolCalls ? JSON.stringify(data) : dataStr;
 
     // On finish, flush buffered tool calls with clean args BEFORE emitting finish event
-    const hasFinish = choices.some(choice => choice?.finish_reason === 'tool_calls' || choice?.finish_reason === 'stop');
     if (hasFinish) {
       if (bufferingToolCalls) {
         flushTrackedCalls(controller);
