@@ -573,7 +573,7 @@ export function findNamedCandidates(message: string, candidates: readonly CwdCan
   const text = message.normalize('NFC')
   const named: NamedCandidate[] = []
   for (const candidate of candidates) {
-    const name = basename(candidate.path)
+    const name = basename(candidate.path).normalize('NFC')
     if (name.length >= MIN_NAME_LENGTH && containsToken(text, name)) named.push({ ...candidate, match: 'name' })
     else if (candidate.aliases.some(alias => alias.length >= MIN_NAME_LENGTH && containsToken(text, alias))) named.push({ ...candidate, match: 'alias' })
   }
@@ -594,37 +594,42 @@ function wordsOf(text: string): Set<string> {
 /**
  * The task folder of `project` the message names: of its direct subfolders (not starting with
  * `.` or `_`, not themselves listed), the one sharing the most words with the message, leaving out
- * the project's own name. It needs `MIN_TASK_NAME_WORDS` and no other folder as many; else `null`.
+ * the words of the project's own path (its name and the folders above it). It needs
+ * `MIN_TASK_NAME_WORDS`, and no other folder as many unless only it holds one of `paths`; else `null`.
  */
-export function findTaskFolder(project: CwdCandidate, message: string, listed: readonly CwdCandidate[]): string | null {
-  const projectWords = wordsOf(basename(project.path))
+export function findTaskFolder(project: CwdCandidate, message: string, listed: readonly CwdCandidate[], paths: readonly string[] = []): string | null {
+  const projectWords = wordsOf(project.path)
   const messageWords = wordsOf(message)
-  let best: { path: string; score: number } | null = null
-  let tied = false
+  let best: string[] = []
+  let bestScore = MIN_TASK_NAME_WORDS
   for (const entry of readEntries(project.path).slice(0, MAX_TASK_FOLDERS)) {
     if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name.startsWith('_')) continue
     const path = join(project.path, entry.name)
     if (listed.some(candidate => candidate.path === path)) continue
     let score = 0
     for (const word of wordsOf(entry.name)) if (!projectWords.has(word) && messageWords.has(word)) score++
-    if (score < MIN_TASK_NAME_WORDS) continue
-    if (!best || score > best.score) {
-      best = { path, score }
-      tied = false
-    } else if (score === best.score) {
-      tied = true
+    if (score > bestScore) {
+      best = [path]
+      bestScore = score
+    } else if (score === bestScore) {
+      best.push(path)
     }
   }
-  return best && !tied ? best.path : null
+  if (best.length > 1) best = best.filter(folder => paths.some(path => isWithin(folder, path)))
+  return best.length === 1 ? best[0]! : null
 }
 
-/** A route to a listed folder goes into the task folder the message (or an attachment's path) names, when it is usable. */
-function intoTaskFolder(ctx: CwdRouteContext, route: CwdRoute, input: CwdRouterInput, candidates: readonly CwdCandidate[]): CwdRoute {
+/**
+ * A route to a listed folder goes into the task folder the message names, when it is usable.
+ * Attachments inside the project add the words of their path below it; `paths` break a tie.
+ */
+function intoTaskFolder(ctx: CwdRouteContext, route: CwdRoute, input: CwdRouterInput, candidates: readonly CwdCandidate[], paths: readonly string[]): CwdRoute {
   if (route.action !== 'route' || route.last) return route
   const project = candidates.find(candidate => candidate.path === route.target)
   if (!project) return route
-  const text = [input.message, ...(input.attachments ?? []).map(attachment => attachment.path ?? '')].join(' ')
-  const task = findTaskFolder(project, text, candidates)
+  const below = (input.attachments ?? [])
+    .map(attachment => (attachment.path && isAbsolute(attachment.path) && isWithin(project.path, resolve(attachment.path)) ? relative(project.path, resolve(attachment.path)) : ''))
+  const task = findTaskFolder(project, [input.message, ...below].join(' '), candidates, paths)
   if (!task || !ctx.isValid(task)) return route
   const key = keyOf(ctx.root, task)
   return { ...route, target: task, to: key, task: key }
@@ -835,8 +840,9 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
     isValid: deps.isValidDirectory ?? (path => isValidWorkingDirectory(path).valid),
   }
   const { option: last, candidates } = lastOption(input.lastWorkingDirectory, root, listed, ctx.isValid)
-  const picked = await pickFromRoot(ctx, input, candidates, last, deps)
-  const route = settle(ctx, intoTaskFolder(ctx, picked.route, input, candidates))
+  const paths = collectMessagePaths(input.message, input.attachments, { workingDirectory, root, homeDir: deps.homeDir })
+  const picked = await pickFromRoot(ctx, input, candidates, last, paths, deps)
+  const route = settle(ctx, intoTaskFolder(ctx, picked.route, input, candidates, paths))
   // What happened to the session, for the decision model's answers only
   recordDecisionOutcome(picked.decision, {
     action: route.action,
@@ -855,10 +861,10 @@ async function pickFromRoot(
   input: CwdRouterInput,
   candidates: CwdCandidate[],
   last: CwdCandidate | null,
+  paths: readonly string[],
   deps: CwdRouterDeps,
 ): Promise<{ route: CwdRoute; decision?: DecisionResult | null }> {
   const settled = (route: CwdRoute) => ({ route })
-  const paths = collectMessagePaths(input.message, input.attachments, { workingDirectory: ctx.workingDirectory, root: ctx.root, homeDir: deps.homeDir })
   const pathSignal = classifyPaths(paths, ctx.root, last ? [...candidates, last] : candidates)
   if (pathSignal?.kind === 'root') return settled(stay(ctx, 'path', 'in_root'))
   if (pathSignal?.kind === 'target') return settled(judgeHardSignal(ctx, pathSignal.candidate, 'path'))
@@ -895,4 +901,14 @@ export function describeRoute(route: CwdRoute): string {
     route.task ? 'task name' : '',
   ].filter(Boolean).join(', ')
   return `Auto working directory: ${route.from} → ${route.to ?? '?'} (${why})`
+}
+
+/**
+ * `[file:…]`/`[folder:…]` mentions with a relative path, made absolute in `base`, the folder the
+ * message was written in: the agent resolves relative mentions in its own folder, which a route
+ * has just changed.
+ */
+export function anchorRelativeMentions(text: string, base: string): string {
+  return text.replace(/\[(file|folder):([^\]]+)\]/g, (match, kind: string, path: string) =>
+    path.startsWith('/') || path.startsWith('~') ? match : `[${kind}:${join(base, path)}]`)
 }

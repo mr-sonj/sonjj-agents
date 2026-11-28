@@ -118,7 +118,7 @@ import { buildGuardedModeCheck } from '../decisions/guarded-mode'
 import { buildSubagentModelPicker } from '../decisions/subagent-models'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
-import { describeRoute, isAutoWorkingDirectoryOn, isPlainChatRequest, isSameDirectory, pickLastWorkingDirectory, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
+import { anchorRelativeMentions, describeRoute, isAutoWorkingDirectoryOn, isPlainChatRequest, isSameDirectory, pickLastWorkingDirectory, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
 import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
 import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, resolveTaskScopeLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
@@ -6456,7 +6456,7 @@ export class SessionManager implements ISessionManager {
     if (managed.agent || managed.sdkSessionId || !managed.workingDirectory) return false
     if (turn.activationResend || turn.authRetry || options?.hidden || managed.hidden || managed.systemPromptPreset === 'mini') return false
     if (managed.taskSlug || managed.taskRunId || managed.taskNodeId || managed.taskDraft || managed.unattended
-      || managed.parentSessionId || managed.triggeredBy || managed.branchFromMessageId) return false
+      || managed.parentSessionId || managed.triggeredBy || managed.branchFromMessageId || managed.projectId) return false
     const origin = managed.workingDirectoryOrigin ?? 'explicit'
     if (origin !== 'default' && origin !== 'inherited') return false
     if (message.trim().startsWith('/')) return false
@@ -7355,7 +7355,10 @@ export class SessionManager implements ISessionManager {
     // folder to the project it is about, before anything below reads the folder (skill sources,
     // suggestions, the agent's system prompt and shell).
     if (this.shouldAutoRouteWorkingDirectory(managed, message, options, { activationResend, authRetry: _isAuthRetry })) {
+      const writtenIn = managed.workingDirectory
       await this.autoRouteWorkingDirectory(managed, message, attachments)
+      // Relative file mentions were written against the folder the session was in
+      if (writtenIn && managed.workingDirectory !== writtenIn) message = anchorRelativeMentions(message, writtenIn)
     }
 
     // Pre-enable sources required by invoked skills (Issue #249)

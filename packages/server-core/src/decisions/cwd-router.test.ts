@@ -22,6 +22,7 @@ import {
   describeRoute,
   findNamedCandidates,
   findTaskFolder,
+  anchorRelativeMentions,
   isPlainChatRequest,
   normalizeFolderListLines,
   parseFolderList,
@@ -246,6 +247,12 @@ describe('cwd router', () => {
       expect(keys('check acme-api and the garden.')).toEqual(['projects/acme-api', 'projects/garden'])
       expect(keys('the api is down')).toEqual([])
       expect(keys('acmeish gardens')).toEqual([])
+    })
+
+    it('matches a folder name written decomposed (NFD) against a message in NFC', () => {
+      const nfd = 'projects/vườn-nhà'.normalize('NFD')
+      mkdirSync(join(root, nfd), { recursive: true })
+      expect(findNamedCandidates('tưới vườn-nhà sáng nay', listed([`${nfd}: garden`])).map(c => c.key)).toEqual([nfd])
     })
 
     it('matches aliases like folder names, with their accents, any case', () => {
@@ -489,6 +496,34 @@ describe('cwd router', () => {
       expect(await route('fix this', '', {}, [{ path: at(`${lan}/shot.png`), name: 'shot.png' }])).toMatchObject({ target: at(lan), task: lan })
     })
 
+    it('breaks a tie with the folder a path is in', async () => {
+      tasks()
+      const tide = 'projects/acme/241102-acme_shop-forecast-tide'
+      expect(await route(`check [file:${tide}/plan.md]`)).toMatchObject({ action: 'route', reason: 'path', target: at(tide), task: tide })
+      expect(findTaskFolder(acme(), 'forecast tide', listed(), [at(`${tide}/plan.md`)])).toBe(at(tide))
+      // A path into a folder that is not among the best keeps the tie
+      expect(findTaskFolder(acme(), 'forecast tide', listed(), [at(`${lan}/x.md`)])).toBeNull()
+    })
+
+    it('never counts words of the folders above the project', async () => {
+      tasks()
+      // The test root is named cwd-router-…: "router" comes from the path, "notes" from the file name
+      mkdirSync(join(root, 'projects/acme/241104-acme-router-notes'), { recursive: true })
+      expect(findTaskFolder(acme(), `fix ${at('projects/acme/notes.md')}`, listed())).toBeNull()
+      // The cost: a word of a folder above the project never counts, even when the user means it
+      expect(findTaskFolder(acme(), 'router notes', listed())).toBeNull()
+      expect(findTaskFolder(acme(), 'build the lan dashboard', listed())).toBe(at(lan))
+    })
+
+    it('leaves out the words of a project name written with _ or .', () => {
+      for (const rel of ['260623-shop_com-content-strategy', '260721-shop_com-strategy-keywords']) mkdirSync(join(root, 'projects/shop.com', rel), { recursive: true })
+      const lines = ['projects/shop.com: the shop']
+      const shop = listed(lines)[0]!
+      expect(findTaskFolder(shop, 'shop com strategy', listed(lines))).toBeNull()
+      expect(findTaskFolder(shop, 'shop com content', listed(lines))).toBeNull()
+      expect(findTaskFolder(shop, 'the strategy keywords', listed(lines))).toBe(at('projects/shop.com/260721-shop_com-strategy-keywords'))
+    })
+
     it('stays in the project when the task folder is not usable', async () => {
       tasks()
       const result = await route('tiếp task lan dashboard cho acme', '', { isValidDirectory: path => path !== at(lan) })
@@ -601,6 +636,14 @@ describe('cwd router', () => {
     expect(describeRoute({ action: 'route', reason: 'model', from: 'projects/acme', to: '(root)', rule: 'stay_or_unclear' })).toBe('Auto working directory: projects/acme → (root) (model)')
     expect(describeRoute({ action: 'route', reason: 'name', from: '(root)', to: 'projects/acme/t-1', task: 'projects/acme/t-1' })).toBe('Auto working directory: (root) → projects/acme/t-1 (name, task name)')
     expect(describeRoute({ action: 'route', reason: 'model', confidence: 0.8, from: '(root)', to: 'projects/acme/t-1', last: true })).toBe('Auto working directory: (root) → projects/acme/t-1 (model, 0.80, last)')
+  })
+})
+
+describe('anchorRelativeMentions', () => {
+  it('makes relative file and folder mentions absolute in the folder they were written in', () => {
+    expect(anchorRelativeMentions('see [file:projects/acme/plan.md] and [folder:docs]', '/w/root'))
+      .toBe('see [file:/w/root/projects/acme/plan.md] and [folder:/w/root/docs]')
+    expect(anchorRelativeMentions('[file:/abs/a.md] [file:~/b.md] [skill:x] plain', '/w/root')).toBe('[file:/abs/a.md] [file:~/b.md] [skill:x] plain')
   })
 })
 

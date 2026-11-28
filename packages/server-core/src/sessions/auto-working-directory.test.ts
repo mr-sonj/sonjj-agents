@@ -169,6 +169,8 @@ describe('auto working directory', () => {
     // A kanban tile ("Create task") has no task slug, only the task's label
     ['it carries a task label', { labels: ['task-item-1'] }],
     ['it carries the Task label itself', { labels: ['task'] }],
+    // Also after the user picks the root in it
+    ['it belongs to a project', { projectId: 'project-1' }],
   ]
   for (const [why, fields, message, options] of notAsked) {
     it(`does not ask when ${why}`, async () => {
@@ -300,6 +302,16 @@ describe('auto working directory', () => {
     const router = spyOn(cwdRouter, 'routeWorkingDirectory')
     await sm.sendMessage(managed.id, 'plan the garden for spring')
     expect(router).not.toHaveBeenCalled()
+  })
+
+  it('gives the agent file mentions resolved in the folder they were written in', async () => {
+    const managed = await session('mention')
+    const sent: string[] = []
+    const agent = { getModel: () => 'claude-sonnet-4-6', setAllSources: () => {}, getSessionId: () => 'sdk-session', chat: async function* (message: string) { sent.push(message); yield { type: 'complete' } } }
+    ;(sm as any).getOrCreateAgent = async () => agent
+    await sm.sendMessage(managed.id, 'fix [file:projects/garden/plan.md] please')
+    expect(managed.workingDirectory).toBe(join(projectRoot, 'projects/garden'))
+    expect(sent[0]).toContain(`[file:${join(projectRoot, 'projects/garden/plan.md')}]`)
   })
 
   it('lets the first message pick again after the user picks the root', async () => {
