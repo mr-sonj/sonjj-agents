@@ -147,6 +147,16 @@ describe('cwd router', () => {
       ])
     })
 
+    it('reads aliases in parentheses before the colon', () => {
+      const [garden] = parseFolderList(['projects/garden (Vườn rau, watering , vườn rau,): planting'], root).candidates
+      expect(garden).toMatchObject({ key: 'projects/garden', path: at('projects/garden'), aliases: ['Vườn rau', 'watering'] })
+      expect(garden!.description).toBe('planting (aliases: Vườn rau, watering) (Garden plans — Planting calendar, watering and seed orders.)')
+      expect(listed(['projects/garden (veggies)']).map(c => c.description)).toEqual(['(aliases: veggies) (Garden plans — Planting calendar, watering and seed orders.)'])
+      expect(listed(['projects/acme: x']).map(c => c.aliases)).toEqual([[]])
+      // A wrong path is reported without its aliases
+      expect(parseFolderList(['projects/nope (a, b): x'], root).issues).toEqual([{ line: 1, path: 'projects/nope', kind: 'missing' }])
+    })
+
     it('uses at most the first MAX_CANDIDATES folders', () => {
       const lines: string[] = []
       for (let i = 0; i <= MAX_CANDIDATES; i++) {
@@ -231,6 +241,29 @@ describe('cwd router', () => {
       expect(keys('check acme-api and the garden.')).toEqual(['projects/acme-api', 'projects/garden'])
       expect(keys('the api is down')).toEqual([])
       expect(keys('acmeish gardens')).toEqual([])
+    })
+
+    it('matches aliases like folder names, with their accents, any case', () => {
+      const candidates = listed(['projects/garden (vườn rau, veg): planting', 'projects/acme (cửa hàng): storefront'])
+      const keys = (message: string) => findNamedCandidates(message, candidates).map(c => c.key)
+      expect(keys('tưới VƯỜN RAU sáng nay')).toEqual(['projects/garden'])
+      expect(keys('tuoi vuon rau sang nay')).toEqual([])
+      expect(keys('mở cửa hàng và vườn rau')).toEqual(['projects/garden', 'projects/acme'])
+      // Shorter than four characters: sent to the model, never matched
+      expect(keys('buy veg')).toEqual([])
+      // NFD input matches an NFC alias
+      expect(keys('vườn rau'.normalize('NFD'))).toEqual(['projects/garden'])
+    })
+
+    it('routes on an alias without asking the model, as on a folder name', async () => {
+      const model = jev({ target: pick('stay', 0.9) })
+      const lines = ['projects/garden (vườn rau): planting', 'projects/acme: storefront']
+      expect(await route('tưới vườn rau sáng nay', '', { resolveClient: model.resolveClient }, undefined, lines)).toMatchObject({ action: 'route', reason: 'alias', target: at('projects/garden') })
+      expect(model.bodies).toHaveLength(0)
+      // A name and an alias pointing at different folders: the model picks between them
+      const both = jev({ target: pick('projects/acme', 0.6) })
+      expect(await route('acme hay vườn rau?', '', { resolveClient: both.resolveClient }, undefined, lines)).toMatchObject({ action: 'route', reason: 'name', to: 'projects/acme' })
+      expect(Object.keys(both.bodies[0]!.questions.target!.criteria!)).toEqual(['projects/garden', 'projects/acme', 'stay', 'unclear'])
     })
 
     it('routes on a path without asking the model', async () => {
@@ -427,7 +460,7 @@ describe('cwd router', () => {
   })
 
   it('builds the request with the reserved options last', () => {
-    const request = buildCwdRouterRequest({ message: 'm', current: { path: '(root)', description: '' }, options: [{ key: 'a/b', path: '/r/a/b', description: '' }] })
+    const request = buildCwdRouterRequest({ message: 'm', current: { path: '(root)', description: '' }, options: [{ key: 'a/b', path: '/r/a/b', description: '', aliases: [] }] })
     expect(request.questions.target).toMatchObject({ type: 'choice', criteria: { 'a/b': null, stay: expect.any(String), unclear: 'Cannot tell' } })
   })
 

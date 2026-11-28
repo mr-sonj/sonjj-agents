@@ -67,6 +67,16 @@ export interface CwdCandidate {
   /** Absolute path below the root. */
   path: string
   description: string
+  /** Other names for the folder, written in parentheses after its path (NFC). */
+  aliases: string[]
+}
+
+/** How a message names a candidate: its folder name, or one of its aliases. */
+export type CwdNameMatch = 'name' | 'alias'
+
+/** A candidate the message names. */
+export interface NamedCandidate extends CwdCandidate {
+  match: CwdNameMatch
 }
 
 /** Why no listed folder was picked (the session works in the root), or why it stays where it is. */
@@ -87,8 +97,8 @@ export interface CwdRoute {
   action: 'stay' | 'route'
   /** Absolute folder to switch to (routes only). */
   target?: string
-  /** What decided: a path, a folder name, or the model alone. */
-  reason: 'path' | 'name' | 'model'
+  /** What decided: a path, a folder name, one of its aliases, or the model alone. */
+  reason: 'path' | CwdNameMatch | 'model'
   /** The model's confidence in its pick, when it was asked. */
   confidence?: number
   /** The session's folder below the root (`(root)` for the root itself). */
@@ -216,18 +226,31 @@ export function readFolderListLines(value: unknown): string[] {
   return normalizeFolderListLines(Array.isArray(value) ? value.map(asLine) : typeof value === 'string' ? value : [asLine(value)])
 }
 
-/** A listed folder's note followed by what its AGENTS.md/CLAUDE.md says, when it has one. */
-function describeListedFolder(path: string, note: string): string {
+/** A listed folder's note, its aliases, then what its AGENTS.md/CLAUDE.md says, when it has one. */
+function describeListedFolder(path: string, note: string, aliases: readonly string[]): string {
   const file = contextFileIn(readEntries(path))
   const fromFile = file ? describeContextFileAt(join(path, file)) : ''
-  const clipped = clip(note, NOTE_MAX_CHARS)
-  return clipped && fromFile ? `${clipped} (${fromFile})` : clipped || fromFile
+  const own = [clip(note, NOTE_MAX_CHARS), aliases.length ? `(aliases: ${aliases.join(', ')})` : ''].filter(Boolean).join(' ')
+  return own && fromFile ? `${own} (${fromFile})` : own || fromFile
+}
+
+/** `path (alias, alias)` → the path and its aliases (trimmed, NFC, without blanks or repeats in any case). */
+function splitAliases(head: string): { written: string; aliases: string[] } {
+  const match = /^(.*?)\s*\(([^()]*)\)$/.exec(head)
+  if (!match) return { written: head, aliases: [] }
+  const aliases: string[] = []
+  for (const raw of match[2]!.split(',')) {
+    const alias = raw.trim().normalize('NFC')
+    if (alias && !aliases.some(seen => seen.toLocaleLowerCase() === alias.toLocaleLowerCase())) aliases.push(alias)
+  }
+  return { written: match[1]!.trim(), aliases }
 }
 
 /**
  * The workspace's folder list (`autoWorkingDirectoryFolders`): the only folders the router may
  * move a session to. One line per folder, `<path relative to the root>: <when to pick it>`;
  * blank lines and lines starting with `#` are skipped, and a folder name may not contain `:`.
+ * Aliases go in parentheses after the path: `<path> (<alias>, <alias>): <note>`.
  * Lines naming no folder below the root are reported as issues and skipped. `describe: false`
  * only checks the lines (no context files are read).
  */
@@ -244,7 +267,7 @@ export function parseFolderList(
     const text = raw.trim()
     if (!text || text.startsWith('#')) return
     const colon = text.indexOf(':')
-    const written = (colon >= 0 ? text.slice(0, colon) : text).trim()
+    const { written, aliases } = splitAliases((colon >= 0 ? text.slice(0, colon) : text).trim())
     const note = colon >= 0 ? text.slice(colon + 1).trim() : ''
     const rel = written.replace(/^\.[\\/]+/, '').replace(/[\\/]+$/, '')
     const line = index + 1
@@ -258,7 +281,7 @@ export function parseFolderList(
     seen.add(key)
     if (!isDirectory(path)) return void issues.push({ line, path: written, kind: 'missing' })
     if (candidates.length >= MAX_CANDIDATES) return void issues.push({ line, path: written, kind: 'too_many' })
-    candidates.push({ key, path, description: options.describe === false ? note : describeListedFolder(path, note) })
+    candidates.push({ key, path, aliases, description: options.describe === false ? note : describeListedFolder(path, note, aliases) })
   })
   return { candidates, issues }
 }
@@ -460,13 +483,24 @@ function escapeRegExp(text: string): string {
   return text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
 }
 
-/** Candidates whose folder name (at least `MIN_NAME_LENGTH` characters) appears in the message as a whole token, any case. */
-export function findNamedCandidates(message: string, candidates: readonly CwdCandidate[]): CwdCandidate[] {
-  return candidates.filter(candidate => {
+/** `phrase` appears in `text` as a whole token (letters, digits, `_`, `-` and dotted names never run into it), any case. */
+function containsToken(text: string, phrase: string): boolean {
+  return new RegExp(`(?<![\\p{L}\\p{N}_.-])${escapeRegExp(phrase)}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`, 'iu').test(text)
+}
+
+/**
+ * Candidates the message names, in list order: by folder name or by an alias (at least
+ * `MIN_NAME_LENGTH` characters), as a whole token, any case, accents as written (both sides NFC).
+ */
+export function findNamedCandidates(message: string, candidates: readonly CwdCandidate[]): NamedCandidate[] {
+  const text = message.normalize('NFC')
+  const named: NamedCandidate[] = []
+  for (const candidate of candidates) {
     const name = basename(candidate.path)
-    if (name.length < MIN_NAME_LENGTH) return false
-    return new RegExp(`(?<![\\p{L}\\p{N}_.-])${escapeRegExp(name)}(?![\\p{L}\\p{N}_-]|\\.[\\p{L}\\p{N}])`, 'iu').test(message)
-  })
+    if (name.length >= MIN_NAME_LENGTH && containsToken(text, name)) named.push({ ...candidate, match: 'name' })
+    else if (candidate.aliases.some(alias => alias.length >= MIN_NAME_LENGTH && containsToken(text, alias))) named.push({ ...candidate, match: 'alias' })
+  }
+  return named
 }
 
 // ── Model ───────────────────────────────────────────────────────────────
@@ -547,13 +581,13 @@ export function judgeMiniModelAnswer(
   ctx: CwdRouteContext,
   choice: string | null,
   options: readonly CwdCandidate[],
-  named: readonly CwdCandidate[],
+  named: readonly NamedCandidate[],
 ): CwdRoute {
   const via = 'mini_model' as const
   if (choice === STAY || choice === UNCLEAR) return stay(ctx, 'model', 'stay_or_unclear', { via })
   const target = choice ? options.find(option => option.key === choice) : undefined
   if (!target) return stay(ctx, 'model', 'no_answer', { via })
-  const reason = named.some(candidate => candidate.key === target.key) ? 'name' : 'model'
+  const reason = named.find(candidate => candidate.key === target.key)?.match ?? 'model'
   const picked = { to: target.key, via }
   if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
   return { action: 'route', target: target.path, reason, from: ctx.from, ...picked }
@@ -602,7 +636,7 @@ function stay(ctx: CwdRouteContext, reason: CwdRoute['reason'], rule: CwdStayRul
 }
 
 /** A path or a folder name pointing at `target`, without the model. */
-export function judgeHardSignal(ctx: CwdRouteContext, target: CwdCandidate, reason: 'path' | 'name'): CwdRoute {
+export function judgeHardSignal(ctx: CwdRouteContext, target: CwdCandidate, reason: 'path' | CwdNameMatch): CwdRoute {
   if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', { to: target.key })
   return { action: 'route', target: target.path, reason, from: ctx.from, to: target.key }
 }
@@ -612,7 +646,7 @@ export function judgeModelAnswer(
   ctx: CwdRouteContext,
   result: DecisionResult | null,
   options: readonly CwdCandidate[],
-  named: readonly CwdCandidate[],
+  named: readonly NamedCandidate[],
 ): CwdRoute {
   const answer = result?.answers.target
   if (!answer || answer.type !== 'choice') return stay(ctx, 'model', 'no_answer')
@@ -620,8 +654,9 @@ export function judgeModelAnswer(
   if (answer.choice === STAY || answer.choice === UNCLEAR) return stay(ctx, 'model', 'stay_or_unclear', { confidence })
   const target = options.find(option => option.key === answer.choice)
   if (!target) return stay(ctx, 'model', 'no_answer')
-  const nameHit = named.some(candidate => candidate.key === target.key)
-  const reason = nameHit ? 'name' : 'model'
+  const hit = named.find(candidate => candidate.key === target.key)?.match
+  const nameHit = hit !== undefined
+  const reason = hit ?? 'model'
   const picked = { confidence, to: target.key }
   if (confidence < MIN_TARGET_CONFIDENCE) return stay(ctx, reason, 'low_confidence', picked)
   if (!nameHit && confidence < ROUTE_FROM_ROOT_AT) return stay(ctx, reason, 'below_threshold', picked)
@@ -689,7 +724,7 @@ async function pickFromRoot(
   if (pathSignal?.kind === 'target') return settled(judgeHardSignal(ctx, pathSignal.candidate, 'path'))
 
   const named = findNamedCandidates(input.message, candidates)
-  if (named.length === 1) return settled(judgeHardSignal(ctx, named[0]!, 'name'))
+  if (named.length === 1) return settled(judgeHardSignal(ctx, named[0]!, named[0]!.match))
 
   // Several folders named: the model picks among them. `stay`/`unclear` are reserved option keys.
   const options = (named.length > 1 ? named : candidates).filter(option => option.key !== STAY && option.key !== UNCLEAR)
