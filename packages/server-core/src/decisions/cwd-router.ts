@@ -3,18 +3,18 @@
  *
  * On a session's first message, before its agent exists, pick the project folder the message is
  * about, so the system prompt's project context files and the shell start there exactly as if
- * the user had picked the folder. Staying put is the default: without a clear signal, or without
- * an answer, the session keeps its folder.
+ * the user had picked the folder. It always picks from the root, wherever the session sits (a
+ * folder remembered from an earlier session is not a default), and the root is the default:
+ * without a clear signal, or without an answer, the session works in the root.
  *
  * The only folders it may move to are those the workspace lists (`autoWorkingDirectoryFolders`,
  * paths relative to the context root, the workspace's `defaults.workingDirectory`), each with a
  * note on when to pick it; a listed folder's AGENTS.md/CLAUDE.md adds to that note. Hard signals
  * are checked first: a path in the message or an attachment, then a listed folder's name in the
  * message (words in the notes are never hard signals). A model is asked only when they do not
- * settle it: the decision model (Jev) when the decision layer is on (one call: does the message
- * belong where the session is, and which folder is it about), else the session connection's
- * small model (`askMiniModel`), which answers with one folder key and no confidence, so a hard
- * signal stands in for the thresholds. Only paths relative to the root reach either provider.
+ * settle it: the decision model (Jev) when the decision layer is on (which folder is the message
+ * about), else the session connection's small model (`askMiniModel`), which answers with one
+ * folder key and no confidence. Only paths relative to the root reach either provider.
  *
  * SessionManager decides when this runs and applies the result; apart from reading the listed
  * folders this module has no side effects.
@@ -29,12 +29,8 @@ import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { isValidWorkingDirectory } from '../utils/path-validation'
 import { FOREGROUND_MAX_DEADLINE_MS, openDecisionPoint, recordDecisionOutcome, type DecisionPointDeps } from './decision-point'
 
-/** Away from a folder below the root: `belongs_here` at or above this keeps the session where it is. */
-export const STAY_IF_BELONGS_AT = 0.4
-/** At the root: the model's pick needs this much confidence without a hard signal. */
+/** The decision model's pick needs this much confidence without a hard signal. */
 export const ROUTE_FROM_ROOT_AT = 0.7
-/** Away from a folder below the root: the model's pick needs this much confidence, and a hard signal. */
-export const ROUTE_LATERAL_AT = 0.85
 /** Below this the model's pick never moves the session. */
 export const MIN_TARGET_CONFIDENCE = 0.5
 
@@ -61,7 +57,6 @@ const STAY = 'stay'
 const UNCLEAR = 'unclear'
 const ROOT_LABEL = '(root)'
 
-const BELONGS_HERE_INSTRUCTIONS = 'Is this message about the work described in `current`? A short follow-up like "continue", "check that again" counts as yes.'
 const TARGET_INSTRUCTIONS = 'Which project folder is this message about?'
 const STAY_CRITERION = 'Not clearly about any listed folder, or about the current one'
 const UNCLEAR_CRITERION = 'Cannot tell'
@@ -74,19 +69,21 @@ export interface CwdCandidate {
   description: string
 }
 
-/** Why the router stayed; absent on a route. */
+/** Why no listed folder was picked (the session works in the root), or why it stays where it is. */
 export type CwdStayRule =
-  | 'here'            // a path in the message is in the current folder
+  | 'in_root'         // the paths in the message are in the root, outside every listed folder
   | 'no_answer'       // no (usable) answer from the model
   | 'stay_or_unclear' // the model picked `stay` or `unclear`
   | 'low_confidence'  // the pick is below MIN_TARGET_CONFIDENCE
-  | 'belongs_here'    // the message belongs to the current folder
-  | 'same_branch'     // the target contains the current folder or lies inside its project
-  | 'below_threshold' // the pick is below the route threshold
-  | 'no_hard_signal'  // a lateral move without a path or name pointing at the target
+  | 'below_threshold' // the pick is below ROUTE_FROM_ROOT_AT
   | 'invalid_target'  // the target is not a usable directory
+  | 'already_there'   // the session is in the picked folder already
 
 export interface CwdRoute {
+  /**
+   * `route`: move the session to `target`, a folder other than the one it is in. That is the root
+   * when nothing is picked for a session sitting in a remembered folder (`rule` says why).
+   */
   action: 'stay' | 'route'
   /** Absolute folder to switch to (routes only). */
   target?: string
@@ -94,9 +91,9 @@ export interface CwdRoute {
   reason: 'path' | 'name' | 'model'
   /** The model's confidence in its pick, when it was asked. */
   confidence?: number
-  /** The current folder below the root (`(root)` for the root itself). */
+  /** The session's folder below the root (`(root)` for the root itself). */
   from: string
-  /** The picked folder below the root, also when a rule kept the session where it is. */
+  /** The picked folder below the root (`(root)` when moving back to it), also when a rule kept the session where it is. */
   to?: string
   rule?: CwdStayRule
   /** Which model was asked: the decision model or the connection's small model. */
@@ -106,7 +103,7 @@ export interface CwdRoute {
 export interface CwdRouterInput {
   /** Context root: the workspace's `defaults.workingDirectory`. */
   root: string
-  /** The session's folder now. */
+  /** The session's folder now: the root, or a folder remembered from an earlier session (never a default). */
   workingDirectory: string
   message: string
   attachments?: readonly { path?: string; name: string; type?: string }[]
@@ -440,23 +437,23 @@ export function collectMessagePaths(
   return [...paths]
 }
 
-export type CwdPathSignal = { kind: 'here' } | { kind: 'target'; candidate: CwdCandidate }
+export type CwdPathSignal = { kind: 'root' } | { kind: 'target'; candidate: CwdCandidate }
 
 /**
- * What the paths point at: the current folder (`here`), one other candidate (`target`, the
- * deepest containing them), or nothing when they point at different places or at none.
+ * What the paths point at: one candidate (`target`, the deepest containing them), the root itself
+ * (`root`: inside it, outside every candidate), or nothing when they point at different places or
+ * outside the root.
  */
-export function classifyPaths(paths: readonly string[], workingDirectory: string, candidates: readonly CwdCandidate[]): CwdPathSignal | null {
+export function classifyPaths(paths: readonly string[], root: string, candidates: readonly CwdCandidate[]): CwdPathSignal | null {
   const buckets = new Map<string, CwdCandidate | null>()
   for (const path of paths) {
     const candidate = deepestContaining(candidates, path)
-    // In the working directory and in no candidate below it
-    if (isWithin(workingDirectory, path) && (!candidate || isWithin(candidate.path, workingDirectory))) buckets.set('', null)
-    else if (candidate) buckets.set(candidate.key, candidate)
+    if (candidate) buckets.set(candidate.key, candidate)
+    else if (isWithin(root, path)) buckets.set('', null)
   }
   if (buckets.size !== 1) return null
   const [only] = buckets.values()
-  return only ? { kind: 'target', candidate: only } : { kind: 'here' }
+  return only ? { kind: 'target', candidate: only } : { kind: 'root' }
 }
 
 function escapeRegExp(text: string): string {
@@ -479,7 +476,6 @@ export function buildCwdRouterRequest(input: {
   attachments?: readonly string[]
   current: { path: string; description: string }
   options: readonly CwdCandidate[]
-  askBelongsHere: boolean
 }): DecisionRequest {
   const message = input.message.length > MESSAGE_MAX_CHARS ? `${input.message.slice(0, MESSAGE_MAX_CHARS)}…` : input.message
   const criteria: Record<string, string | null> = {}
@@ -493,33 +489,23 @@ export function buildCwdRouterRequest(input: {
       current: input.current,
     },
     questions: {
-      ...(input.askBelongsHere
-        ? { belongs_here: { type: 'noul' as const, instructions: BELONGS_HERE_INSTRUCTIONS } }
-        : {}),
       target: { type: 'choice', instructions: TARGET_INSTRUCTIONS, criteria },
     },
   }
 }
 
-/**
- * The small model's prompt: the same state and options as the decision model's request, as text,
- * asking for one option key back. `askBelongsHere`: away from the root, a follow-up counts as `stay`.
- */
+/** The small model's prompt: the same state and options as the decision model's request, as text, asking for one option key back. */
 export function buildMiniModelPrompt(input: {
   message: string
   attachments?: readonly string[]
   current: { path: string; description: string }
   options: readonly CwdCandidate[]
-  askBelongsHere: boolean
 }): string {
   const message = input.message.length > MESSAGE_MAX_CHARS ? `${input.message.slice(0, MESSAGE_MAX_CHARS)}…` : input.message
   const current = input.current.description ? `${input.current.path} — ${input.current.description}` : input.current.path
-  const stay = input.askBelongsHere
-    ? `${STAY_CRITERION}. A short follow-up like "continue" or "check that again" counts as stay.`
-    : STAY_CRITERION
   const options = [
     ...input.options.map(option => (option.description ? `- ${option.key}: ${option.description}` : `- ${option.key}`)),
-    `- ${STAY}: ${stay}`,
+    `- ${STAY}: ${STAY_CRITERION}`,
     `- ${UNCLEAR}: ${UNCLEAR_CRITERION}`,
   ]
   return [
@@ -556,11 +542,7 @@ export function parseMiniModelAnswer(text: string | null | undefined, options: r
   return folded.length === 1 ? folded[0]! : null
 }
 
-/**
- * Apply the route rules to the small model's pick. It gives no confidence, so away from the root a
- * folder the message names stands in for the decision model's thresholds; from the root its pick
- * is taken. `named`: candidates named in the message.
- */
+/** Apply the route rules to the small model's pick. It gives no confidence: its pick is taken. `named`: candidates named in the message. */
 export function judgeMiniModelAnswer(
   ctx: CwdRouteContext,
   choice: string | null,
@@ -571,13 +553,8 @@ export function judgeMiniModelAnswer(
   if (choice === STAY || choice === UNCLEAR) return stay(ctx, 'model', 'stay_or_unclear', { via })
   const target = choice ? options.find(option => option.key === choice) : undefined
   if (!target) return stay(ctx, 'model', 'no_answer', { via })
-  const nameHit = named.some(candidate => candidate.key === target.key)
-  const reason = nameHit ? 'name' : 'model'
+  const reason = named.some(candidate => candidate.key === target.key) ? 'name' : 'model'
   const picked = { to: target.key, via }
-  if (!ctx.atRoot) {
-    if (sameBranch(ctx, target)) return stay(ctx, reason, 'same_branch', picked)
-    if (!nameHit) return stay(ctx, reason, 'no_hard_signal', picked)
-  }
   if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
   return { action: 'route', target: target.path, reason, from: ctx.from, ...picked }
 }
@@ -611,39 +588,26 @@ async function askMiniModelWithin(
 }
 
 export interface CwdRouteContext {
+  root: string
+  /** The session's folder now (the root, or a remembered folder). */
   workingDirectory: string
-  atRoot: boolean
-  /** The deepest candidate containing the working directory, if any. */
-  current: CwdCandidate | null
+  /** `workingDirectory` below the root (`(root)` for the root itself). */
   from: string
   isValid: (path: string) => boolean
 }
 
-/** The listed folder the session is in keeps its note; a folder below it is described by its own context file first. */
-function describeCurrent(ctx: CwdRouteContext, root: string): string {
-  if (ctx.current && ctx.current.path === ctx.workingDirectory) return ctx.current.description
-  return describeFolder(ctx.workingDirectory, root) || ctx.current?.description || ''
-}
-
-/** The target contains the working directory, lies below it, or lies inside the current project. */
-function sameBranch(ctx: CwdRouteContext, target: CwdCandidate): boolean {
-  return isWithin(target.path, ctx.workingDirectory)
-    || isWithin(ctx.workingDirectory, target.path)
-    || (ctx.current !== null && isWithin(ctx.current.path, target.path))
-}
-
+/** No folder picked: the session works in the root. */
 function stay(ctx: CwdRouteContext, reason: CwdRoute['reason'], rule: CwdStayRule, extra: Partial<CwdRoute> = {}): CwdRoute {
   return { action: 'stay', reason, from: ctx.from, rule, ...extra }
 }
 
 /** A path or a folder name pointing at `target`, without the model. */
 export function judgeHardSignal(ctx: CwdRouteContext, target: CwdCandidate, reason: 'path' | 'name'): CwdRoute {
-  if (!ctx.atRoot && sameBranch(ctx, target)) return stay(ctx, reason, 'same_branch', { to: target.key })
   if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', { to: target.key })
   return { action: 'route', target: target.path, reason, from: ctx.from, to: target.key }
 }
 
-/** Apply the route rules to the model's answer. `named`: candidates named in the message. */
+/** Apply the route rules to the decision model's answer. `named`: candidates named in the message. */
 export function judgeModelAnswer(
   ctx: CwdRouteContext,
   result: DecisionResult | null,
@@ -660,24 +624,27 @@ export function judgeModelAnswer(
   const reason = nameHit ? 'name' : 'model'
   const picked = { confidence, to: target.key }
   if (confidence < MIN_TARGET_CONFIDENCE) return stay(ctx, reason, 'low_confidence', picked)
-  if (ctx.atRoot) {
-    if (!nameHit && confidence < ROUTE_FROM_ROOT_AT) return stay(ctx, reason, 'below_threshold', picked)
-  } else {
-    const belongs = result?.answers.belongs_here
-    if (!belongs || belongs.type !== 'noul') return stay(ctx, reason, 'no_answer', picked)
-    if (belongs.noul >= STAY_IF_BELONGS_AT) return stay(ctx, reason, 'belongs_here', picked)
-    if (sameBranch(ctx, target)) return stay(ctx, reason, 'same_branch', picked)
-    if (confidence < ROUTE_LATERAL_AT) return stay(ctx, reason, 'below_threshold', picked)
-    if (!nameHit) return stay(ctx, reason, 'no_hard_signal', picked)
-  }
+  if (!nameHit && confidence < ROUTE_FROM_ROOT_AT) return stay(ctx, reason, 'below_threshold', picked)
   if (!ctx.isValid(target.path)) return stay(ctx, reason, 'invalid_target', picked)
   return { action: 'route', target: target.path, reason, from: ctx.from, ...picked }
 }
 
 /**
- * Where the session's first message says it should work. `null` when the router does not apply
- * (the folder is outside the root, or no listed folder is usable). Never throws on a model failure;
- * a filesystem error may throw, so callers wrap it.
+ * The pick, relative to where the session is: picking the folder it is in keeps it there
+ * (`already_there`), and picking nothing for a session in a remembered folder moves it to the root.
+ */
+function settle(ctx: CwdRouteContext, pick: CwdRoute): CwdRoute {
+  if (pick.action === 'route') {
+    return isSameDirectory(pick.target, ctx.workingDirectory) ? { ...pick, action: 'stay', target: undefined, rule: 'already_there' } : pick
+  }
+  if (isSameDirectory(ctx.workingDirectory, ctx.root)) return pick
+  return { ...pick, action: 'route', target: ctx.root, to: ROOT_LABEL }
+}
+
+/**
+ * Where the session's first message says it should work, picked from the root. `null` when the
+ * router does not apply (the folder is outside the root, or no listed folder is usable). Never
+ * throws on a model failure; a filesystem error may throw, so callers wrap it.
  */
 export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRouterDeps = {}): Promise<CwdRoute | null> {
   const tag = '[decision:auto_working_directory]'
@@ -691,49 +658,57 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
   if (issues.length > 0) deps.log?.(`${tag} folder list lines skipped: ${issues.map(issue => `${issue.line} (${issue.kind})`).join(', ')}`)
   if (candidates.length === 0) return null
 
-  const atRoot = workingDirectory === root
   const ctx: CwdRouteContext = {
+    root,
     workingDirectory,
-    atRoot,
-    current: atRoot ? null : deepestContaining(candidates, workingDirectory),
-    from: atRoot ? ROOT_LABEL : keyOf(root, workingDirectory),
+    from: workingDirectory === root ? ROOT_LABEL : keyOf(root, workingDirectory),
     isValid: deps.isValidDirectory ?? (path => isValidWorkingDirectory(path).valid),
   }
-
-  const paths = collectMessagePaths(input.message, input.attachments, { workingDirectory, root, homeDir: deps.homeDir })
-  const pathSignal = classifyPaths(paths, workingDirectory, candidates)
-  if (pathSignal?.kind === 'here') return stay(ctx, 'path', 'here')
-  if (pathSignal?.kind === 'target') return judgeHardSignal(ctx, pathSignal.candidate, 'path')
-
-  const named = findNamedCandidates(input.message, candidates)
-  if (atRoot && named.length === 1) return judgeHardSignal(ctx, named[0]!, 'name')
-
-  // Several folders named: the model picks among them. `stay`/`unclear` are reserved option keys.
-  const options = (named.length > 1 ? named : candidates).filter(option => option.key !== STAY && option.key !== UNCLEAR)
-  if (options.length === 0) return null
-  const attachments = input.attachments?.map(attachment => (attachment.type ? `${attachment.name} (${attachment.type})` : attachment.name))
-  const current = { path: ctx.from, description: describeCurrent(ctx, root) }
-  // The turn start waits for this answer. The decision model needs only the decision layer on (no toggle).
-  const decide = await openDecisionPoint({ ...deps, record: 'auto_working_directory', maxDeadlineMs: FOREGROUND_MAX_DEADLINE_MS, sessionId: input.sessionId })
-  if (!decide) {
-    // Off or unavailable: the connection's small model, if the host offers one. Not in decisions.jsonl.
-    if (!deps.askMiniModel) return stay(ctx, 'model', 'no_answer')
-    // Away from the root only a folder the message names may win: without one no answer could move it
-    if (!atRoot && named.length === 0) return stay(ctx, 'model', 'no_hard_signal')
-    const prompt = buildMiniModelPrompt({ message: input.message, attachments, current, options, askBelongsHere: !atRoot })
-    const reply = await askMiniModelWithin(deps.askMiniModel, prompt, deps.miniModelDeadlineMs ?? MINI_MODEL_DEADLINE_MS, deps.log)
-    return judgeMiniModelAnswer(ctx, parseMiniModelAnswer(reply, options), options, named)
-  }
-  const request = buildCwdRouterRequest({ message: input.message, attachments, current, options, askBelongsHere: !atRoot })
-  // No answer from a decision model that opened: stay rather than wait again for the small model
-  const result = await decide(request, { candidates: options.length, narrowed: named.length > 1, atRoot })
-  const route: CwdRoute = { ...judgeModelAnswer(ctx, result, options, named), via: 'jev' }
-  recordDecisionOutcome(result, {
+  const picked = await pickFromRoot(ctx, input, candidates, deps)
+  const route = settle(ctx, picked.route)
+  // What happened to the session, for the decision model's answers only
+  recordDecisionOutcome(picked.decision, {
     action: route.action,
     changed: route.action === 'route',
     detail: { reason: route.reason, rule: route.rule, from: route.from, to: route.to, confidence: route.confidence },
   })
   return route
+}
+
+/** The pick from the root, with the decision model's answer when it was asked. */
+async function pickFromRoot(
+  ctx: CwdRouteContext,
+  input: CwdRouterInput,
+  candidates: CwdCandidate[],
+  deps: CwdRouterDeps,
+): Promise<{ route: CwdRoute; decision?: DecisionResult | null }> {
+  const settled = (route: CwdRoute) => ({ route })
+  const paths = collectMessagePaths(input.message, input.attachments, { workingDirectory: ctx.workingDirectory, root: ctx.root, homeDir: deps.homeDir })
+  const pathSignal = classifyPaths(paths, ctx.root, candidates)
+  if (pathSignal?.kind === 'root') return settled(stay(ctx, 'path', 'in_root'))
+  if (pathSignal?.kind === 'target') return settled(judgeHardSignal(ctx, pathSignal.candidate, 'path'))
+
+  const named = findNamedCandidates(input.message, candidates)
+  if (named.length === 1) return settled(judgeHardSignal(ctx, named[0]!, 'name'))
+
+  // Several folders named: the model picks among them. `stay`/`unclear` are reserved option keys.
+  const options = (named.length > 1 ? named : candidates).filter(option => option.key !== STAY && option.key !== UNCLEAR)
+  if (options.length === 0) return settled(stay(ctx, 'model', 'no_answer'))
+  const attachments = input.attachments?.map(attachment => (attachment.type ? `${attachment.name} (${attachment.type})` : attachment.name))
+  const current = { path: ROOT_LABEL, description: describeFolder(ctx.root, ctx.root) }
+  // The turn start waits for this answer. The decision model needs only the decision layer on (no toggle).
+  const decide = await openDecisionPoint({ ...deps, record: 'auto_working_directory', maxDeadlineMs: FOREGROUND_MAX_DEADLINE_MS, sessionId: input.sessionId })
+  if (!decide) {
+    // Off or unavailable: the connection's small model, if the host offers one. Not in decisions.jsonl.
+    if (!deps.askMiniModel) return settled(stay(ctx, 'model', 'no_answer'))
+    const prompt = buildMiniModelPrompt({ message: input.message, attachments, current, options })
+    const reply = await askMiniModelWithin(deps.askMiniModel, prompt, deps.miniModelDeadlineMs ?? MINI_MODEL_DEADLINE_MS, deps.log)
+    return settled(judgeMiniModelAnswer(ctx, parseMiniModelAnswer(reply, options), options, named))
+  }
+  const request = buildCwdRouterRequest({ message: input.message, attachments, current, options })
+  // No answer from a decision model that opened: stay rather than wait again for the small model
+  const decision = await decide(request, { candidates: options.length, narrowed: named.length > 1 })
+  return { route: { ...judgeModelAnswer(ctx, decision, options, named), via: 'jev' }, decision }
 }
 
 /** One line for the transcript and the log, e.g. `Auto working directory: (root) → projects/acme (name)`. */

@@ -51,7 +51,6 @@ function jev(answer: Answers | ((body: { state: Record<string, unknown>; questio
 }
 
 const pick = (choice: string, confidence: number) => ({ type: 'choice', choice, confidence, probabilities: { [choice]: confidence } })
-const noul = (value: number) => ({ type: 'noul', noul: value })
 const off = async (): Promise<DecisionClientResolution> => ({ ok: false, failure: { kind: 'disabled', message: 'off' } })
 
 /** The workspace's folder list in these tests (`projects/notes` and `deep/a/b` exist but are not listed). */
@@ -214,14 +213,13 @@ describe('cwd router', () => {
       ].sort())
     })
 
-    it('stays for a path in the current folder, routes for a path in another, ignores paths that disagree', () => {
-      const W = at('projects/acme')
-      expect(classifyPaths([at('projects/acme/src/x.ts')], W, candidates())).toEqual({ kind: 'here' })
-      expect(classifyPaths([at('projects/garden/x')], W, candidates())).toMatchObject({ kind: 'target', candidate: { key: 'projects/garden' } })
-      expect(classifyPaths([at('content/drafts/x')], at(''), candidates())).toMatchObject({ kind: 'target', candidate: { key: 'content/drafts' } })
-      expect(classifyPaths([at('projects/garden/x'), at('content/x')], W, candidates())).toBeNull()
-      expect(classifyPaths([at('projects/garden/x'), at('projects/acme/y')], W, candidates())).toBeNull()
-      expect(classifyPaths(['/somewhere/else'], W, candidates())).toBeNull()
+    it('points at the deepest listed folder holding the paths, or at the root, and ignores paths that disagree', () => {
+      expect(classifyPaths([at('projects/notes/x.md')], root, candidates())).toEqual({ kind: 'root' })
+      expect(classifyPaths([at('projects/garden/x')], root, candidates())).toMatchObject({ kind: 'target', candidate: { key: 'projects/garden' } })
+      expect(classifyPaths([at('content/drafts/x')], root, candidates())).toMatchObject({ kind: 'target', candidate: { key: 'content/drafts' } })
+      expect(classifyPaths([at('projects/garden/x'), at('content/x')], root, candidates())).toBeNull()
+      expect(classifyPaths([at('projects/garden/x'), at('projects/notes/y')], root, candidates())).toBeNull()
+      expect(classifyPaths(['/somewhere/else'], root, candidates())).toBeNull()
     })
 
     it('matches folder names as whole tokens, any case, at least four characters', () => {
@@ -239,7 +237,7 @@ describe('cwd router', () => {
       const model = jev({ target: pick('stay', 0.9) })
       expect(await route(`fix ${at('projects/garden/plan.md')}`, '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'route', reason: 'path', target: at('projects/garden'), from: '(root)', to: 'projects/garden' })
       expect(await route('fix it', 'projects/acme', { resolveClient: model.resolveClient }, [{ path: at('projects/garden/a.png'), name: 'a.png' }])).toMatchObject({ action: 'route', reason: 'path', to: 'projects/garden' })
-      expect(await route(`fix ${at('projects/acme/src/x.ts')}`, 'projects/acme', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'path', rule: 'here' })
+      expect(await route(`fix ${at('projects/acme/src/x.ts')}`, 'projects/acme', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'path', rule: 'already_there', to: 'projects/acme' })
       expect(model.bodies).toHaveLength(0)
     })
 
@@ -251,8 +249,8 @@ describe('cwd router', () => {
 
     it('only knows listed folders: a path elsewhere keeps the session put, other names are no signal', async () => {
       const model = jev({ target: pick('stay', 0.9) })
-      // A path in the current folder outside every listed one
-      expect(await route(`look at ${at('projects/notes/todo.md')}`, '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'path', rule: 'here' })
+      // A path in the root outside every listed folder
+      expect(await route(`look at ${at('projects/notes/todo.md')}`, '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'path', rule: 'in_root' })
       expect(model.bodies).toHaveLength(0)
       // `notes` is a folder, but not listed: the model is asked, and never offered it
       expect(await route('clean up my notes', '', { resolveClient: model.resolveClient })).toMatchObject({ action: 'stay', reason: 'model' })
@@ -274,17 +272,17 @@ describe('cwd router', () => {
   })
 
   describe('the model', () => {
-    it('sends relative paths only, the clipped message and attachment names; asks belongs_here only away from the root', async () => {
-      const model = jev(body => ({ ...(body.questions.belongs_here ? { belongs_here: noul(0.9) } : {}), target: pick('stay', 0.9) }))
+    it('sends relative paths only, the clipped message and attachment names, always from the root', async () => {
+      const model = jev({ target: pick('stay', 0.9) })
       await route(`${'x'.repeat(MESSAGE_MAX_CHARS + 10)}`, '', { resolveClient: model.resolveClient }, [{ name: 'shot.png', type: 'image' }])
       await route('continue', 'projects/acme/tasks/rework', { resolveClient: model.resolveClient })
-      const [fromRoot, fromTask] = model.bodies
-      expect(fromRoot!.questions.belongs_here).toBeUndefined()
+      const [fromRoot] = model.bodies
       expect((fromRoot!.state.message as string).length).toBe(MESSAGE_MAX_CHARS + 1)
       expect(fromRoot!.state.attachments).toEqual(['shot.png (image)'])
-      expect(fromRoot!.state.current).toEqual({ path: '(root)', description: 'Workspace — Everything lives here.' })
-      expect(fromTask!.questions.belongs_here?.type).toBe('noul')
-      expect(fromTask!.state.current).toEqual({ path: 'projects/acme/tasks/rework', description: 'Rework pricing — Move the pricing endpoint to v2.' })
+      for (const body of model.bodies) {
+        expect(body.questions.belongs_here).toBeUndefined()
+        expect(body.state.current).toEqual({ path: '(root)', description: 'Workspace — Everything lives here.' })
+      }
       expect(JSON.stringify(model.bodies)).not.toContain(root)
     })
 
@@ -300,27 +298,21 @@ describe('cwd router', () => {
       expect(await route('when should we plant tomatoes?', '', { resolveClient: jev({ target: pick('projects/garden', 0.65) }).resolveClient })).toMatchObject({ action: 'stay', rule: 'below_threshold' })
     })
 
-    it('stays when the message belongs where the session is (a name does not override it)', async () => {
-      const answers = { belongs_here: noul(0.5), target: pick('projects/garden', 0.95) }
-      expect(await route('check the garden notes', 'projects/acme', { resolveClient: jev(answers).resolveClient })).toMatchObject({ action: 'stay', rule: 'belongs_here' })
+    it('routes from the root even when the session sits in a remembered folder', async () => {
+      const result = await route('plan the garden for spring', 'projects/acme')
+      expect(result).toMatchObject({ action: 'route', target: at('projects/garden'), from: 'projects/acme', to: 'projects/garden', reason: 'name' })
+      // Into the project of the task folder it sits in, when a path says so
+      expect(await route(`edit ${at('projects/acme/AGENTS.md')}`, 'projects/acme/tasks/rework')).toMatchObject({ action: 'route', reason: 'path', target: at('projects/acme') })
     })
 
-    it('moves sideways only on a name and 0.85', async () => {
-      const lateral = (confidence: number) => jev({ belongs_here: noul(0.1), target: pick('projects/garden', confidence) }).resolveClient
-      expect(await route('look at the garden watering table', 'projects/acme/tasks/rework', { resolveClient: lateral(0.9) })).toMatchObject({ action: 'route', reason: 'name', to: 'projects/garden', from: 'projects/acme/tasks/rework', confidence: 0.9 })
-      expect(await route('look at the garden watering table', 'projects/acme/tasks/rework', { resolveClient: lateral(0.8) })).toMatchObject({ action: 'stay', rule: 'below_threshold' })
-      expect(await route('look at the watering table', 'projects/acme/tasks/rework', { resolveClient: lateral(0.97) })).toMatchObject({ action: 'stay', rule: 'no_hard_signal' })
+    it('moves a session in a remembered folder back to the root when nothing is picked', async () => {
+      const result = await route('hello', 'projects/acme', { resolveClient: jev({ target: pick('stay', 0.9) }).resolveClient })
+      expect(result).toMatchObject({ action: 'route', target: root, from: 'projects/acme', to: '(root)', reason: 'model', rule: 'stay_or_unclear' })
+      expect(await route(`look at ${at('projects/notes/todo.md')}`, 'projects/acme')).toMatchObject({ action: 'route', target: root, to: '(root)', reason: 'path', rule: 'in_root' })
     })
 
-    it('never moves within a branch: task to its project, project to its child, task to a sibling', async () => {
-      // A task folder and its project (a path to the project's AGENTS.md)
-      expect(await route(`edit ${at('projects/acme/AGENTS.md')}`, 'projects/acme/tasks/rework')).toMatchObject({ action: 'stay', reason: 'path', rule: 'same_branch', to: 'projects/acme' })
-      // A project and a folder inside it
-      const child = jev({ belongs_here: noul(0.1), target: pick('content/drafts', 0.95) }).resolveClient
-      expect(await route('move it to drafts', 'content', { resolveClient: child })).toMatchObject({ action: 'stay', rule: 'same_branch' })
-      // A task below a project and another listed folder inside that project
-      mkdirSync(join(root, 'content/post-a'), { recursive: true })
-      expect(await route('move it to drafts', 'content/post-a', { resolveClient: child })).toMatchObject({ action: 'stay', rule: 'same_branch' })
+    it('stays in the root when nothing is picked there', async () => {
+      expect(await route('hello', '', { resolveClient: jev({ target: pick('stay', 0.9) }).resolveClient })).toMatchObject({ action: 'stay', from: '(root)', rule: 'stay_or_unclear' })
     })
 
     it('stays when the target is not a usable folder', async () => {
@@ -379,21 +371,9 @@ describe('cwd router', () => {
       expect(logs.some(line => line.includes('small model failed: boom'))).toBe(true)
     })
 
-    it('away from the root, moves only to a folder the message names', async () => {
-      expect(await route('check the garden watering', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'route', reason: 'name', via: 'mini_model', from: 'projects/acme', to: 'projects/garden' })
-      expect(await route('compare the garden and content plans', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'route', reason: 'name', to: 'projects/garden' })
-      expect(await route('check the garden watering', 'projects/acme', withMini('stay'))).toMatchObject({ action: 'stay', rule: 'stay_or_unclear' })
-    })
-
-    it('away from the root, does not ask when the message names no folder (no answer could move it)', async () => {
-      const model = mini('projects/garden')
-      expect(await route('check the watering', 'projects/acme', { resolveClient: off, askMiniModel: model.askMiniModel })).toMatchObject({ action: 'stay', rule: 'no_hard_signal' })
-      expect(await route('continue', 'projects/acme', { resolveClient: off, askMiniModel: model.askMiniModel })).toMatchObject({ action: 'stay', rule: 'no_hard_signal' })
-      expect(model.prompts).toHaveLength(0)
-    })
-
-    it('never moves within a branch', async () => {
-      expect(await route('move the content draft', 'content/drafts', withMini('content'))).toMatchObject({ action: 'stay', rule: 'same_branch' })
+    it('routes a session in a remembered folder on the small model\'s pick, with no name needed', async () => {
+      expect(await route('when should we plant tomatoes?', 'projects/acme', withMini('projects/garden'))).toMatchObject({ action: 'route', reason: 'model', via: 'mini_model', from: 'projects/acme', to: 'projects/garden' })
+      expect(await route('continue', 'projects/acme', withMini('stay'))).toMatchObject({ action: 'route', target: root, to: '(root)', rule: 'stay_or_unclear' })
     })
 
     it('stays when the small model does not answer in time, and aborts it', async () => {
@@ -420,20 +400,19 @@ describe('cwd router', () => {
       expect(await route('when should we plant tomatoes?', '', { resolveClient: off })).toMatchObject({ action: 'stay', rule: 'no_answer' })
     })
 
-    it('sends relative paths only, the notes, the current folder and the reserved keys', async () => {
+    it('sends relative paths only, the notes, the root as the current folder and the reserved keys', async () => {
       const model = mini('stay')
-      await route('check the garden watering', 'projects/acme/tasks/rework', { resolveClient: off, askMiniModel: model.askMiniModel }, [{ name: 'shot.png', type: 'image' }])
+      await route('check the watering schedule', 'projects/acme/tasks/rework', { resolveClient: off, askMiniModel: model.askMiniModel }, [{ name: 'shot.png', type: 'image' }])
       const [prompt] = model.prompts
       expect(prompt).toContain('- projects/garden: planting calendar and watering (Garden plans — Planting calendar, watering and seed orders.)')
-      expect(prompt).toContain('Current folder: projects/acme/tasks/rework — Rework pricing — Move the pricing endpoint to v2.')
+      expect(prompt).toContain('Current folder: (root) — Workspace — Everything lives here.')
       expect(prompt).toContain('Attachments: shot.png (image)')
-      expect(prompt).toContain('counts as stay')
+      expect(prompt).not.toContain('counts as stay')
       expect(prompt).toContain('- unclear: Cannot tell')
-      expect(prompt).toContain('<message>\ncheck the garden watering\n</message>')
+      expect(prompt).toContain('<message>\ncheck the watering schedule\n</message>')
       expect(prompt).not.toContain(root)
-      const fromRoot = buildMiniModelPrompt({ message: 'x', current: { path: '(root)', description: '' }, options: [], askBelongsHere: false })
-      expect(fromRoot).toContain('Current folder: (root)')
-      expect(fromRoot).not.toContain('counts as stay')
+      const bare = buildMiniModelPrompt({ message: 'x', current: { path: '(root)', description: '' }, options: [] })
+      expect(bare).toContain('Current folder: (root)')
     })
 
     it('records nothing in the decision log', async () => {
@@ -448,13 +427,14 @@ describe('cwd router', () => {
   })
 
   it('builds the request with the reserved options last', () => {
-    const request = buildCwdRouterRequest({ message: 'm', current: { path: '(root)', description: '' }, options: [{ key: 'a/b', path: '/r/a/b', description: '' }], askBelongsHere: false })
+    const request = buildCwdRouterRequest({ message: 'm', current: { path: '(root)', description: '' }, options: [{ key: 'a/b', path: '/r/a/b', description: '' }] })
     expect(request.questions.target).toMatchObject({ type: 'choice', criteria: { 'a/b': null, stay: expect.any(String), unclear: 'Cannot tell' } })
   })
 
   it('describes a route in one line', () => {
     expect(describeRoute({ action: 'route', reason: 'model', confidence: 0.912, from: '(root)', to: 'projects/acme' })).toBe('Auto working directory: (root) → projects/acme (model, 0.91)')
     expect(describeRoute({ action: 'route', reason: 'path', from: 'a', to: 'b' })).toBe('Auto working directory: a → b (path)')
+    expect(describeRoute({ action: 'route', reason: 'model', from: 'projects/acme', to: '(root)', rule: 'stay_or_unclear' })).toBe('Auto working directory: projects/acme → (root) (model)')
   })
 })
 
