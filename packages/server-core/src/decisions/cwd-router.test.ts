@@ -22,6 +22,7 @@ import {
   describeRoute,
   findNamedCandidates,
   findTaskFolder,
+  isPlainChatRequest,
   normalizeFolderListLines,
   parseFolderList,
   parseMiniModelAnswer,
@@ -31,6 +32,8 @@ import {
   routeWorkingDirectory,
   type CwdRouterDeps,
 } from './cwd-router'
+
+import type { CreateSessionOptions } from '@craft-agent/shared/protocol'
 
 type Answers = Record<string, unknown>
 
@@ -598,6 +601,25 @@ describe('cwd router', () => {
     expect(describeRoute({ action: 'route', reason: 'model', from: 'projects/acme', to: '(root)', rule: 'stay_or_unclear' })).toBe('Auto working directory: projects/acme → (root) (model)')
     expect(describeRoute({ action: 'route', reason: 'name', from: '(root)', to: 'projects/acme/t-1', task: 'projects/acme/t-1' })).toBe('Auto working directory: (root) → projects/acme/t-1 (name, task name)')
     expect(describeRoute({ action: 'route', reason: 'model', confidence: 0.8, from: '(root)', to: 'projects/acme/t-1', last: true })).toBe('Auto working directory: (root) → projects/acme/t-1 (model, 0.80, last)')
+  })
+})
+
+describe('isPlainChatRequest', () => {
+  it('is a chat opened without a folder, a task, a parent, a branch or a project', () => {
+    expect(isPlainChatRequest(undefined)).toBe(true)
+    expect(isPlainChatRequest({})).toBe(true)
+    expect(isPlainChatRequest({ labels: ['bug'], permissionMode: 'ask', model: 'm', sessionStatus: 'todo', systemPromptPreset: 'default' })).toBe(true)
+    expect(isPlainChatRequest({ workingDirectory: 'user_default' })).toBe(true)
+  })
+
+  it('is not a hidden, unattended, mini, task, subtask, branch or project session, nor one given a folder', () => {
+    const others: CreateSessionOptions[] = [
+      { hidden: true }, { unattended: true }, { systemPromptPreset: 'mini' },
+      { taskSlug: 't' }, { taskRunId: 'r' }, { taskNodeId: 'n' }, { taskDraft: true }, { applyTaskLabel: true },
+      { parentSessionId: 'p' }, { branchFromSessionId: 's' }, { branchFromMessageId: 'm' }, { projectId: 'p' },
+      { workingDirectory: '/x' }, { workingDirectory: 'none' },
+    ]
+    for (const options of others) expect([options, isPlainChatRequest(options)]).toEqual([options, false])
   })
 })
 

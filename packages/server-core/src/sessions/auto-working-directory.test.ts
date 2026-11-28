@@ -3,6 +3,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createSession as createStoredSession, listSessions, loadSession, saveSession } from '../../../shared/src/sessions/storage.ts'
+import * as sharedConfig from '@craft-agent/shared/config'
 import * as cwdRouter from '../decisions/cwd-router.ts'
 import * as decisionPoint from '../decisions/decision-point.ts'
 import { SessionManager, createManagedSession } from './SessionManager.ts'
@@ -356,6 +357,38 @@ describe('auto working directory', () => {
     expect(managed.workingDirectoryOrigin).toBe('auto')
     expect(agentCreatedIn).toEqual([{ workingDirectory: projectRoot, sdkCwd: projectRoot }])
     expect(events.find(e => e.type === 'info')).toMatchObject({ message: 'Auto working directory: projects/acme → (root) (model)' })
+  })
+
+  describe('a new chat', () => {
+    // Without the fork's folder memory (feature/custom-tweaks) a new session is never `inherited`:
+    // the origin is forced so this runs with or without it.
+    async function create(options: Record<string, unknown>, internal?: { emitCreatedEvent?: boolean; fromClient?: boolean }) {
+      spyOn(sharedConfig, 'getWorkspaceByNameOrId').mockReturnValue({ id: 'ws-test', name: 'Test Workspace', rootPath: wsRoot, createdAt: 1 } as never)
+      spyOn(cwdRouter, 'resolveWorkingDirectoryOrigin').mockReturnValue('inherited')
+      const session = await sm.createSession('ws-test', options as never, internal)
+      return (sm as unknown as { sessions: Map<string, { workingDirectory?: string; workingDirectoryOrigin?: string }> }).sessions.get(session.id)!
+    }
+    const client = { emitCreatedEvent: false, fromClient: true }
+
+    it('starts at the root when a client opens a plain chat', async () => {
+      const managed = await create({ labels: ['bug'] }, client)
+      expect(managed.workingDirectory).toBe(projectRoot)
+      expect(managed.workingDirectoryOrigin).toBe('default')
+    })
+
+    const kept: Array<[string, Record<string, unknown>, typeof client | undefined, (() => void)?]> = [
+      ['no client opened it (an automation, a task, Crafty)', {}, undefined],
+      ['it is a kanban tile', { applyTaskLabel: true, sessionStatus: 'todo' }, client],
+      ['it carries a task\'s label', { labels: ['task-item-1'] }, client],
+      ['the workspace switch is off', {}, client, () => writeConfig(['projects/acme: storefront API'], { enabled: false })],
+      ['the workspace lists no folders', {}, client, () => writeConfig()],
+    ]
+    for (const [why, options, internal, setup] of kept) {
+      it(`keeps the remembered folder when ${why}`, async () => {
+        setup?.()
+        expect((await create(options, internal)).workingDirectoryOrigin).toBe('inherited')
+      })
+    }
   })
 
   it('marks a folder picked in the chat as the user\'s', async () => {

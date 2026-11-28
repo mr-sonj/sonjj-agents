@@ -118,7 +118,7 @@ import { buildGuardedModeCheck } from '../decisions/guarded-mode'
 import { buildSubagentModelPicker } from '../decisions/subagent-models'
 import { assessPermissionRisks } from '../decisions/permission-risks'
 import { checkAutomationCondition } from '../decisions/automation-condition'
-import { describeRoute, isSameDirectory, pickLastWorkingDirectory, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
+import { describeRoute, isAutoWorkingDirectoryOn, isPlainChatRequest, isSameDirectory, pickLastWorkingDirectory, readFolderListLines, resolveWorkingDirectoryOrigin, routeWorkingDirectory, type CwdRoute } from '../decisions/cwd-router'
 import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { listLabels, loadLabelConfig } from '@craft-agent/shared/labels/storage'
 import { extractLabelId, resolveSessionLabels, findTaskItemLabelId, resolveTaskScopeLabelId, LabelEntrySet, canonicalizeSessionLabels, foldsValueCase, type LabelConfig } from '@craft-agent/shared/labels'
@@ -3364,8 +3364,9 @@ export class SessionManager implements ISessionManager {
     // Transport concern, deliberately NOT on the wire DTO: by default every created session is
     // announced to the renderer (see notifySessionCreated). Callers that register the session
     // themselves — the `sessions:create` RPC adds it from the return value — pass
-    // `{ emitCreatedEvent: false }` to avoid a redundant hydrate.
-    internal?: { emitCreatedEvent?: boolean },
+    // `{ emitCreatedEvent: false }` to avoid a redundant hydrate. `fromClient`: a client asked for it
+    // (`sessions:create`), so a plain chat starts at the workspace's folder when auto working directory is on.
+    internal?: { emitCreatedEvent?: boolean; fromClient?: boolean },
   ): Promise<Session> {
     const workspace = getWorkspaceByNameOrId(workspaceId)
     if (!workspace) {
@@ -3479,12 +3480,20 @@ export class SessionManager implements ISessionManager {
 
     // Where the folder came from. Compared with the configured project folder rather than
     // `userDefaultWorkingDir`, so a folder remembered from an earlier session counts as inherited.
-    const workingDirectoryOrigin = resolveWorkingDirectoryOrigin({
+    let workingDirectoryOrigin = resolveWorkingDirectoryOrigin({
       requested: options?.workingDirectory,
       resolved: resolvedWorkingDir,
       configuredDefault: wsConfig?.defaults?.workingDirectory || undefined,
       boundElsewhere: !!resolvedProjectId || !!options?.parentSessionId || !!options?.branchFromSessionId,
     })
+    // Auto working directory: a plain chat a client opens starts at the workspace's folder rather than
+    // one remembered from an earlier session; its first message picks the folder. Tasks, automations
+    // and the rest keep the remembered folder.
+    if (workingDirectoryOrigin === 'inherited' && internal?.fromClient && isPlainChatRequest(options) && isAutoWorkingDirectoryOn(wsConfig)
+      && !this.hasTaskLabel(options?.labels, () => loadLabelConfig(workspaceRootPath).labels)) {
+      resolvedWorkingDir = wsConfig!.defaults!.workingDirectory
+      workingDirectoryOrigin = 'default'
+    }
 
     // Validate branch request up-front so branch metadata is only set for valid branches.
     // This prevents creating sessions that claim to be branched but don't have copied history.

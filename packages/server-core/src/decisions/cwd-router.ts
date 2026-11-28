@@ -24,7 +24,7 @@ import { readdirSync, readFileSync, statSync, type Dirent } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { DecisionRequest, DecisionResult } from '@craft-agent/shared/decisions'
-import type { AutoWorkingDirectoryIssue } from '@craft-agent/shared/protocol'
+import type { AutoWorkingDirectoryIssue, CreateSessionOptions } from '@craft-agent/shared/protocol'
 import type { WorkingDirectoryOrigin } from '@craft-agent/shared/sessions'
 import { isValidWorkingDirectory } from '../utils/path-validation'
 import { FOREGROUND_MAX_DEADLINE_MS, openDecisionPoint, recordDecisionOutcome, type DecisionPointDeps } from './decision-point'
@@ -187,6 +187,23 @@ export function resolveWorkingDirectoryOrigin(input: {
   if (input.requested !== undefined && input.requested !== 'user_default') return 'explicit'
   if (!input.resolved && !input.configuredDefault) return 'default'
   return isSameDirectory(input.resolved, input.configuredDefault) ? 'default' : 'inherited'
+}
+
+/**
+ * A session a client asks for that is a plain chat, so it starts at the root when the switch is
+ * on: no folder given, no task, subtask, branch or project, not hidden, unattended or mini.
+ */
+export function isPlainChatRequest(options: CreateSessionOptions | undefined): boolean {
+  if (!options) return true
+  if (options.workingDirectory !== undefined && options.workingDirectory !== 'user_default') return false
+  if (options.hidden || options.unattended || options.systemPromptPreset === 'mini') return false
+  if (options.taskSlug || options.taskRunId || options.taskNodeId || options.taskDraft || options.applyTaskLabel) return false
+  return !(options.parentSessionId || options.branchFromSessionId || options.branchFromMessageId || options.projectId)
+}
+
+/** The workspace switch is on and there is something to pick: a root and at least one line in the list. */
+export function isAutoWorkingDirectoryOn(config: { autoWorkingDirectory?: unknown; autoWorkingDirectoryFolders?: unknown; defaults?: { workingDirectory?: string } } | null | undefined): boolean {
+  return config?.autoWorkingDirectory === true && !!config.defaults?.workingDirectory && readFolderListLines(config.autoWorkingDirectoryFolders).length > 0
 }
 
 // ── Candidates ──────────────────────────────────────────────────────────

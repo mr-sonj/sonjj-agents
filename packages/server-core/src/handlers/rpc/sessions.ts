@@ -191,7 +191,7 @@ export function registerSessionsHandlers(server: RpcServer, deps: HandlerDeps): 
     const end = perf.start('rpc.createSession', { workspaceId })
     // The renderer adds the session synchronously from this return value (App.tsx handleCreateSession),
     // so suppress the broadcast to avoid a redundant hydrate round-trip.
-    const session = await sessionManager.createSession(workspaceId, options, { emitCreatedEvent: false })
+    const session = await sessionManager.createSession(workspaceId, options, { emitCreatedEvent: false, fromClient: true })
     end()
     return session
   })
