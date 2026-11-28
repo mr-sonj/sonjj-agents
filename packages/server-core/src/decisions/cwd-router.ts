@@ -44,6 +44,12 @@ export const MESSAGE_MAX_CHARS = 2_000
 export const DESCRIPTION_MAX_CHARS = 200
 /** Characters of a folder's note in the list sent to the model. */
 export const NOTE_MAX_CHARS = 400
+/** Words of a task folder's name the message must contain to go into it from its project. */
+export const MIN_TASK_NAME_WORDS = 2
+/** Shorter words of a folder name or message are not counted. */
+export const MIN_TASK_WORD_LENGTH = 3
+/** Entries of a project folder looked at for task folders. */
+export const MAX_TASK_FOLDERS = 500
 /** The longest wait for the small model's pick (a Claude connection starts a CLI process per call). */
 export const MINI_MODEL_DEADLINE_MS = 8_000
 
@@ -116,6 +122,8 @@ export interface CwdRoute {
   via?: 'jev' | 'mini_model'
   /** The target is the folder the latest chat worked in (option `last`). */
   last?: true
+  /** The target is a task folder of the picked project, named in the message (path below the root). */
+  task?: string
 }
 
 export interface CwdRouterInput {
@@ -555,6 +563,56 @@ export function findNamedCandidates(message: string, candidates: readonly CwdCan
   return named
 }
 
+// ── Task folders ────────────────────────────────────────────────────────
+
+/** Words of `text` (NFC, lower case) of `MIN_TASK_WORD_LENGTH`+ characters with a letter (no dates). */
+function wordsOf(text: string): Set<string> {
+  const words = new Set<string>()
+  for (const word of text.normalize('NFC').toLocaleLowerCase().split(/[^\p{L}\p{N}]+/u)) {
+    if (word.length >= MIN_TASK_WORD_LENGTH && /\p{L}/u.test(word)) words.add(word)
+  }
+  return words
+}
+
+/**
+ * The task folder of `project` the message names: of its direct subfolders (not starting with
+ * `.` or `_`, not themselves listed), the one sharing the most words with the message, leaving out
+ * the project's own name. It needs `MIN_TASK_NAME_WORDS` and no other folder as many; else `null`.
+ */
+export function findTaskFolder(project: CwdCandidate, message: string, listed: readonly CwdCandidate[]): string | null {
+  const projectWords = wordsOf(basename(project.path))
+  const messageWords = wordsOf(message)
+  let best: { path: string; score: number } | null = null
+  let tied = false
+  for (const entry of readEntries(project.path).slice(0, MAX_TASK_FOLDERS)) {
+    if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name.startsWith('_')) continue
+    const path = join(project.path, entry.name)
+    if (listed.some(candidate => candidate.path === path)) continue
+    let score = 0
+    for (const word of wordsOf(entry.name)) if (!projectWords.has(word) && messageWords.has(word)) score++
+    if (score < MIN_TASK_NAME_WORDS) continue
+    if (!best || score > best.score) {
+      best = { path, score }
+      tied = false
+    } else if (score === best.score) {
+      tied = true
+    }
+  }
+  return best && !tied ? best.path : null
+}
+
+/** A route to a listed folder goes into the task folder the message (or an attachment's path) names, when it is usable. */
+function intoTaskFolder(ctx: CwdRouteContext, route: CwdRoute, input: CwdRouterInput, candidates: readonly CwdCandidate[]): CwdRoute {
+  if (route.action !== 'route' || route.last) return route
+  const project = candidates.find(candidate => candidate.path === route.target)
+  if (!project) return route
+  const text = [input.message, ...(input.attachments ?? []).map(attachment => attachment.path ?? '')].join(' ')
+  const task = findTaskFolder(project, text, candidates)
+  if (!task || !ctx.isValid(task)) return route
+  const key = keyOf(ctx.root, task)
+  return { ...route, target: task, to: key, task: key }
+}
+
 // ── Model ───────────────────────────────────────────────────────────────
 
 export function buildCwdRouterRequest(input: {
@@ -761,7 +819,7 @@ export async function routeWorkingDirectory(input: CwdRouterInput, deps: CwdRout
   }
   const { option: last, candidates } = lastOption(input.lastWorkingDirectory, root, listed, ctx.isValid)
   const picked = await pickFromRoot(ctx, input, candidates, last, deps)
-  const route = settle(ctx, picked.route)
+  const route = settle(ctx, intoTaskFolder(ctx, picked.route, input, candidates))
   // What happened to the session, for the decision model's answers only
   recordDecisionOutcome(picked.decision, {
     action: route.action,
@@ -813,6 +871,11 @@ async function pickFromRoot(
 
 /** One line for the transcript and the log, e.g. `Auto working directory: (root) → projects/acme (name)`. */
 export function describeRoute(route: CwdRoute): string {
-  const why = route.confidence !== undefined ? `${route.reason}, ${route.confidence.toFixed(2)}` : route.reason
+  const why = [
+    route.reason,
+    route.confidence !== undefined ? route.confidence.toFixed(2) : '',
+    route.last ? 'last' : '',
+    route.task ? 'task name' : '',
+  ].filter(Boolean).join(', ')
   return `Auto working directory: ${route.from} → ${route.to ?? '?'} (${why})`
 }

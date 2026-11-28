@@ -21,6 +21,7 @@ import {
   describeFolder,
   describeRoute,
   findNamedCandidates,
+  findTaskFolder,
   normalizeFolderListLines,
   parseFolderList,
   parseMiniModelAnswer,
@@ -443,6 +444,56 @@ describe('cwd router', () => {
     })
   })
 
+  describe('task folders', () => {
+    const TASKS = ['241101-acme-build-lan-dashboard', '241102-acme_shop-forecast-tide', '241103-acme_shop-forecast-tide-north', '_archive/241001-acme-build-lan-dashboard', '.cache/lan-dashboard-build']
+    const tasks = () => { for (const rel of TASKS) mkdirSync(join(root, 'projects/acme', rel), { recursive: true }) }
+    const acme = () => listed().find(candidate => candidate.key === 'projects/acme')!
+    const lan = 'projects/acme/241101-acme-build-lan-dashboard'
+
+    it('goes into the task folder the message names by two words', async () => {
+      tasks()
+      expect(await route('tiếp task lan dashboard cho acme')).toMatchObject({ action: 'route', reason: 'name', target: at(lan), to: lan, task: lan })
+      expect(await route('acme')).toMatchObject({ action: 'route', target: at('projects/acme'), to: 'projects/acme' })
+    })
+
+    it('stays in the project on one word, a tie, or only words of the project name', () => {
+      tasks()
+      expect(findTaskFolder(acme(), 'the dashboard', listed())).toBeNull()
+      expect(findTaskFolder(acme(), 'forecast tide', listed())).toBeNull()
+      expect(findTaskFolder(acme(), 'acme build', listed())).toBeNull()
+      expect(findTaskFolder(acme(), 'acme shop forecast', listed())).toBeNull()
+      expect(findTaskFolder(acme(), 'forecast tide north', listed())).toBe(at('projects/acme/241103-acme_shop-forecast-tide-north'))
+      expect(findTaskFolder(acme(), 'Lan DASHBOARD', listed())).toBe(at(lan))
+    })
+
+    it('skips folders starting with _ or ., and listed folders', () => {
+      for (const rel of ['_spring-campaign', '.spring-campaign', 'spring-campaign']) mkdirSync(join(root, 'content', rel), { recursive: true })
+      const content = (lines: string[]) => listed(lines).find(candidate => candidate.key === 'content')!
+      expect(findTaskFolder(content(FOLDERS), 'the spring campaign', listed())).toBe(at('content/spring-campaign'))
+      const withCampaign = [...FOLDERS, 'content/spring-campaign: campaign']
+      expect(findTaskFolder(content(withCampaign), 'the spring campaign', listed(withCampaign))).toBeNull()
+    })
+
+    it('never refines the last folder', async () => {
+      mkdirSync(join(root, 'projects/notes/241101-notes-build-lan-dashboard'), { recursive: true })
+      const model = jev({ target: pick('last', 0.9) })
+      expect(await route('continue the lan dashboard', '', { resolveClient: model.resolveClient }, undefined, FOLDERS, at('projects/notes'))).toMatchObject({ action: 'route', target: at('projects/notes'), last: true })
+    })
+
+    it('also refines a route that a path or an attachment chose', async () => {
+      tasks()
+      expect(await route(`fix ${at(`${lan}/plan.md`)}`)).toMatchObject({ action: 'route', reason: 'path', target: at(lan), task: lan })
+      expect(await route('fix this', '', {}, [{ path: at(`${lan}/shot.png`), name: 'shot.png' }])).toMatchObject({ target: at(lan), task: lan })
+    })
+
+    it('stays in the project when the task folder is not usable', async () => {
+      tasks()
+      const result = await route('tiếp task lan dashboard cho acme', '', { isValidDirectory: path => path !== at(lan) })
+      expect(result).toMatchObject({ action: 'route', target: at('projects/acme'), to: 'projects/acme' })
+      expect(result?.task).toBeUndefined()
+    })
+  })
+
   describe('without the decision model', () => {
     /** A small model replying `reply` (or what `reply(prompt)` returns), keeping each prompt. */
     function mini(reply: string | null | ((prompt: string) => string | null)) {
@@ -545,6 +596,8 @@ describe('cwd router', () => {
     expect(describeRoute({ action: 'route', reason: 'model', confidence: 0.912, from: '(root)', to: 'projects/acme' })).toBe('Auto working directory: (root) → projects/acme (model, 0.91)')
     expect(describeRoute({ action: 'route', reason: 'path', from: 'a', to: 'b' })).toBe('Auto working directory: a → b (path)')
     expect(describeRoute({ action: 'route', reason: 'model', from: 'projects/acme', to: '(root)', rule: 'stay_or_unclear' })).toBe('Auto working directory: projects/acme → (root) (model)')
+    expect(describeRoute({ action: 'route', reason: 'name', from: '(root)', to: 'projects/acme/t-1', task: 'projects/acme/t-1' })).toBe('Auto working directory: (root) → projects/acme/t-1 (name, task name)')
+    expect(describeRoute({ action: 'route', reason: 'model', confidence: 0.8, from: '(root)', to: 'projects/acme/t-1', last: true })).toBe('Auto working directory: (root) → projects/acme/t-1 (model, 0.80, last)')
   })
 })
 
