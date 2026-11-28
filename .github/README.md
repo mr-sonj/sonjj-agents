@@ -39,13 +39,15 @@ Get the latest build from [Releases](https://github.com/mr-sonj/sonjj-agents/rel
 There is no Intel Mac build; [build it yourself](#build-from-source) with `build-dmg.sh x64`.
 `SHA256SUMS.txt` lists the checksums: `shasum -a 256 -c SHA256SUMS.txt --ignore-missing`.
 
-The builds are **not signed**, so the system warns the first time you open them:
+The macOS app is **signed and notarized**, so it opens like any other app. The Windows and Linux
+builds are **not signed**, so the system warns the first time you open them:
 
-- **macOS**: open the app once, then go to System Settings → Privacy & Security and click
-  **Open Anyway**. Or, in Terminal: `xattr -dr com.apple.quarantine "/Applications/Sonjj Agents.app"`.
 - **Windows**: when SmartScreen stops the installer, click **More info** → **Run anyway**.
 - **Linux**: `chmod +x Sonjj-Agents-x64.AppImage`, then run it. Some distributions need `libfuse2`
   for AppImages.
+- **macOS, a build you made yourself** (not signed): open the app once, then go to System Settings →
+  Privacy & Security and click **Open Anyway**. Or, in Terminal:
+  `xattr -dr com.apple.quarantine "/Applications/Sonjj Agents.app"`.
 
 The app does not update itself. **Check for updates** opens the releases page; watch the repository
 (Watch → Custom → Releases) to hear about new versions.
