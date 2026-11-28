@@ -7,7 +7,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
-import { getProjectContextFilesPrompt, invalidateContextFileCache, scanContextFiles } from '../system.ts';
+import { getProjectContextFilesPrompt, scanContextFiles } from '../system.ts';
 
 const tempDirs: string[] = [];
 
@@ -112,6 +112,7 @@ describe('scanContextFiles', () => {
 });
 
 describe('getProjectContextFilesPrompt outside git', () => {
+  // The prompt lists the working folder itself, never its subtree (feature/agents-md-discovery)
   it('lists the files of a symlinked working folder', () => {
     const root = tree(['real/CLAUDE.md', 'real/sub/CLAUDE.md']);
     const link = join(root, 'link');
@@ -119,23 +120,18 @@ describe('getProjectContextFilesPrompt outside git', () => {
 
     const block = getProjectContextFilesPrompt(link);
 
-    expect(block).toContain(`context_root="${link}"`);
-    expect(block).toContain('- CLAUDE.md (root)\n- sub/CLAUDE.md');
+    expect(block).toContain(`working_directory="${link}"`);
+    expect(block).toContain(`- ${join(link, 'CLAUDE.md')} (working directory)\n</project_context_files>`);
   });
 
-  it('caches per working folder until that folder is invalidated', () => {
+  it('reads the working folder again on every call', () => {
     const root = tree(['CLAUDE.md', 'pkg/CLAUDE.md']);
     const pkg = join(root, 'pkg');
 
-    expect(getProjectContextFilesPrompt(root)).toContain('- CLAUDE.md (root)\n- pkg/CLAUDE.md');
-    expect(getProjectContextFilesPrompt(pkg)).toContain('- CLAUDE.md (root)\n</project_context_files>');
+    expect(getProjectContextFilesPrompt(pkg)).toContain(`- ${join(pkg, 'CLAUDE.md')} (working directory)\n</project_context_files>`);
 
     writeFileSync(join(pkg, 'AGENTS.md'), '# New\n');
-    expect(getProjectContextFilesPrompt(pkg)).not.toContain('AGENTS.md');
-
-    // The path is resolved the same way as for discovery
-    invalidateContextFileCache(`${pkg}/../pkg/`);
-    expect(getProjectContextFilesPrompt(pkg)).toContain('- AGENTS.md (root)\n- CLAUDE.md (root)');
+    expect(getProjectContextFilesPrompt(pkg)).toContain(`- ${join(pkg, 'AGENTS.md')} (working directory)\n- ${join(pkg, 'CLAUDE.md')} (working directory)`);
     expect(getProjectContextFilesPrompt(root)).not.toContain('AGENTS.md');
   });
 });
