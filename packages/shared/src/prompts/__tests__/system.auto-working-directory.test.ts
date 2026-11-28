@@ -39,7 +39,7 @@ describe('system prompt: auto working directory', () => {
     const guide = join(import.meta.dir, '../../../../../apps/electron/resources/docs/auto-working-directory.md')
     expect(existsSync(guide)).toBe(true)
     const text = readFileSync(guide, 'utf-8')
-    for (const needle of ['`autoWorkingDirectory`', '`autoWorkingDirectoryFolders`', '`defaults.workingDirectory`', '<folder path relative to the root>: <when to pick this folder>']) {
+    for (const needle of ['`autoWorkingDirectory`', '`autoWorkingDirectoryFolders`', '`defaults.workingDirectory`', '<folder path relative to the root> (<alias>, <alias>): <when to pick this folder>', '## Task folders and the last folder']) {
       expect(text).toContain(needle)
     }
   })
